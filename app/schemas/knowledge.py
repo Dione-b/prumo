@@ -3,6 +3,9 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
+# Query mode for the /knowledge/query endpoint.
+QueryMode = Literal["local", "global", "hybrid"]
+
 
 class DocumentIngestRequest(BaseModel):
     project_id: UUID
@@ -15,6 +18,19 @@ class DocumentIngestRequest(BaseModel):
 class AnswerCitation(BaseModel):
     document_id: UUID | None = None
     snippet: str
+    source: str | None = Field(
+        default=None,
+        description="Human-readable source label (entity name or doc title).",
+    )
+
+    @model_validator(mode="after")
+    def coerce_source_from_entity(self) -> "AnswerCitation":
+        """Ensure source is always populated for Phase 2 compatibility."""
+        if self.source is None and self.document_id is not None:
+            object.__setattr__(
+                self, "source", f"doc:{self.document_id}"
+            )
+        return self
 
 
 class KnowledgeAnswer(BaseModel):

@@ -1,6 +1,15 @@
+"""Knowledge query and ingestion orchestrator.
+
+Handles document ingestion scheduling and query routing between cache-based
+(Phase 2) and graph-based (Phase 3) query modes.
+"""
+
+from __future__ import annotations
+
 from datetime import UTC, datetime
 from uuid import UUID
 
+import structlog
 from fastapi import BackgroundTasks
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,11 +19,18 @@ from app.schemas.knowledge import (
     CacheRefreshingResponse,
     DocumentIngestRequest,
     KnowledgeAnswer,
+    QueryMode,
 )
+from app.services.graph_query_service import global_query, hybrid_query, local_query
 from app.services.knowledge_gemini import (
     answer_question_with_cache,
     process_document_task,
 )
+
+logger = structlog.get_logger()
+
+# Statuses considered "usable" for queries (Phase 2 + Phase 3 compatible).
+_QUERYABLE_STATUSES = ("READY", "READY_PARTIAL", "PROCESSING")
 
 
 async def orchestrate_ingestion(
@@ -34,7 +50,7 @@ async def orchestrate_ingestion(
     result = await db.execute(stmt)
     existing_doc: KnowledgeDocument | None = result.scalar_one_or_none()
 
-    if existing_doc and existing_doc.status in ("PROCESSING", "READY"):
+    if existing_doc and existing_doc.status in ("PROCESSING", "READY", "READY_PARTIAL"):
         return existing_doc, True
 
     new_doc = KnowledgeDocument(
@@ -58,8 +74,14 @@ async def orchestrate_query(
     question: str,
     background_tasks: BackgroundTasks,
     db: AsyncSession,
+    mode: QueryMode = "hybrid",
 ) -> KnowledgeAnswer | CacheRefreshingResponse | None:
-    """Perform a knowledge query with cache refresh and processing state handling.
+    """Perform a knowledge query with mode-based routing.
+
+    Modes:
+      - 'local':  Graph-only query via pgvector + CTE traversal.
+      - 'global': Graph-only query via community summaries.
+      - 'hybrid': Graph query first, falls back to cache if graph is empty.
 
     Returns:
     - KnowledgeAnswer when a query can be executed.
@@ -68,7 +90,7 @@ async def orchestrate_query(
     """
     stmt = select(KnowledgeDocument).where(
         KnowledgeDocument.project_id == project_id,
-        KnowledgeDocument.status.in_(["READY", "PROCESSING"]),
+        KnowledgeDocument.status.in_(list(_QUERYABLE_STATUSES)),
     )
     result = await db.execute(stmt)
     documents = list(result.scalars().all())
@@ -76,6 +98,7 @@ async def orchestrate_query(
     if not documents:
         return None
 
+    # ── Handle stale caches ──
     stale_docs: list[KnowledgeDocument] = []
     now = datetime.now(UTC)
 
@@ -96,21 +119,49 @@ async def orchestrate_query(
             retry_after_seconds=30,
         )
 
-    ready_and_active_docs = [
+    # ── Route based on mode ──
+    ready_docs = [
         doc
         for doc in documents
-        if doc not in stale_docs
-        and doc.status == "READY"
+        if doc.status in ("READY", "READY_PARTIAL")
         and (doc.gemini_cache_name or doc.raw_content)
     ]
 
-    if not ready_and_active_docs:
-        # Indicates documents exist but are all currently processing.
+    if not ready_docs:
         return CacheRefreshingResponse(
             status="PROCESSING_WAIT",
             stale_document_ids=[],
             retry_after_seconds=5,
         )
 
-    return await answer_question_with_cache(question, ready_and_active_docs)
+    # Try graph-based query for explicit graph modes.
+    if mode in ("local", "global"):
+        try:
+            if mode == "local":
+                return await local_query(db, project_id, question)
+            return await global_query(db, project_id, question)
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "graph_query_failed_fallback_cache",
+                project_id=str(project_id),
+                mode=mode,
+            )
+            # Fall back to cache-based query.
+            return await answer_question_with_cache(question, ready_docs)
 
+    # Hybrid mode: try graph first, fall back to cache.
+    try:
+        answer = await hybrid_query(db, project_id, question)
+
+        # If the graph returned a meaningful answer, use it.
+        if answer.confidence_level != "LOW" or answer.citations:
+            return answer
+
+    except Exception:  # noqa: BLE001
+        logger.info(
+            "hybrid_graph_empty_fallback_cache",
+            project_id=str(project_id),
+        )
+
+    # Fallback: cache-based query (Phase 2 behavior).
+    return await answer_question_with_cache(question, ready_docs)

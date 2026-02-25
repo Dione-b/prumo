@@ -1,3 +1,15 @@
+"""Document processing pipeline with Graph-RAG integration.
+
+Three-branch architecture:
+  Branch A: File API upload + Context Caching (Phase 2 — existing)
+  Branch B: Entity extraction via Flash + graph upsert
+  Branch C: Node embedding + community detection fire-and-forget
+
+If Branch A succeeds but B/C fail, status is set to READY_PARTIAL
+instead of ERROR — the document is usable for cache-based queries
+even without a complete knowledge graph.
+"""
+
 import asyncio
 import os
 import tempfile
@@ -6,7 +18,7 @@ from datetime import timedelta
 from typing import Any
 from uuid import UUID
 
-import google.generativeai as genai
+import google.generativeai as genai  # type: ignore[import-untyped]
 import structlog
 from google.api_core.exceptions import InvalidArgument
 from sqlalchemy import select, update
@@ -15,6 +27,9 @@ from app.config import settings
 from app.database import async_session_maker
 from app.models.knowledge import KnowledgeDocument
 from app.schemas.knowledge import KnowledgeAnswer
+from app.services.community_detector import fire_community_detection
+from app.services.embedding_service import embed_new_nodes
+from app.services.graph_extractor import extract_entities_from_chunks, upsert_graph_data
 
 logger = structlog.get_logger()
 genai.configure(api_key=settings.gemini_api_key.get_secret_value())  # type: ignore[attr-defined]
@@ -72,22 +87,26 @@ def _create_cache_sync(file_info: Any) -> Any:
 
 
 async def process_document_task(document_id: UUID) -> None:
-    """Process a knowledge document through Gemini File API and Context Caching.
+    """Process a knowledge document through File API, caching, and graph extraction.
 
-    Three phases:
-    1) Read raw content from the database.
-    2) Perform blocking File API + cache creation in a worker thread.
-    3) Persist the resulting URIs / cache metadata in a fresh transaction.
+    Architecture:
+      Branch A: File API + Cache (C_03 — own session)
+      Branch B: Entity extraction + graph upsert (savepoint)
+      Branch C: Embedding + community detection (savepoint + fire-and-forget)
+
+    If A succeeds but B/C fail, status is READY_PARTIAL — the document is
+    usable for cache queries but the knowledge graph is incomplete.
     """
     tmp_path: str | None = None
     try:
-        # Phase 1: fetch scalars only, then close the session.
+        # ── Phase 1: Fetch document data ──
         async with async_session_maker() as db:
             async with db.begin():
                 result = await db.execute(
                     select(
                         KnowledgeDocument.raw_content,
                         KnowledgeDocument.title,
+                        KnowledgeDocument.project_id,
                     ).where(KnowledgeDocument.id == document_id)
                 )
                 row = result.first()
@@ -97,11 +116,12 @@ async def process_document_task(document_id: UUID) -> None:
 
         raw_content = row[0]
         title = row[1]
+        project_id = row[2]
 
         if raw_content is None:
             return
 
-        # Phase 2: blocking I/O and SDK calls, no DB session open.
+        # ── Branch A: File API + Context Caching ──
         fd, tmp_path = tempfile.mkstemp(suffix=".txt", text=True)
         with os.fdopen(fd, "w") as file:
             file.write(raw_content)
@@ -121,9 +141,6 @@ async def process_document_task(document_id: UUID) -> None:
                 "status": "READY",
             }
         except InvalidArgument as exc:
-            # Handle cases where the document is below the minimum cache size
-            # or violates token limits. In that scenario we still keep the file
-            # reference but skip cache usage.
             message = str(exc).lower()
             if "minimum" in message or "32768" in message:
                 update_values = {
@@ -139,7 +156,7 @@ async def process_document_task(document_id: UUID) -> None:
             else:
                 raise
 
-        # Phase 3: write result in a new transaction with explicit UPDATE.
+        # Persist Branch A results.
         async with async_session_maker() as db:
             async with db.begin():
                 await db.execute(
@@ -149,10 +166,94 @@ async def process_document_task(document_id: UUID) -> None:
                 )
 
         logger.info(
-            "document_processed",
+            "branch_a_complete",
             document_id=str(document_id),
             status=update_values.get("status", "READY"),
         )
+
+        # ── Branch B: Entity Extraction + Graph Upsert ──
+        graph_success = False
+        try:
+            extraction = await extract_entities_from_chunks(raw_content)
+
+            if extraction.entities:
+                async with async_session_maker() as db:
+                    async with db.begin():
+                        # Savepoint for atomicity — if this fails, Branch A
+                        # result is already committed.
+                        async with db.begin_nested():
+                            await upsert_graph_data(
+                                db, project_id, document_id, extraction
+                            )
+                        graph_success = True
+
+                logger.info(
+                    "branch_b_complete",
+                    document_id=str(document_id),
+                    entities=len(extraction.entities),
+                    relations=len(extraction.relations),
+                )
+            else:
+                logger.info(
+                    "branch_b_no_entities",
+                    document_id=str(document_id),
+                )
+                graph_success = True  # No entities is not a failure.
+
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "branch_b_failed",
+                document_id=str(document_id),
+                error=str(exc),
+            )
+
+        # ── Branch C: Embedding + Community Detection ──
+        embedding_success = False
+        try:
+            if graph_success:
+                async with async_session_maker() as db:
+                    async with db.begin():
+                        async with db.begin_nested():
+                            await embed_new_nodes(db, project_id)
+                        embedding_success = True
+
+                # Fire community detection as an independent background task.
+                # It owns its own session via fire_community_detection().
+                asyncio.create_task(
+                    fire_community_detection(project_id)
+                )
+
+                logger.info(
+                    "branch_c_complete",
+                    document_id=str(document_id),
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "branch_c_failed",
+                document_id=str(document_id),
+                error=str(exc),
+            )
+
+        # ── Final status update ──
+        if not graph_success or not embedding_success:
+            async with async_session_maker() as db:
+                async with db.begin():
+                    await db.execute(
+                        update(KnowledgeDocument)
+                        .where(KnowledgeDocument.id == document_id)
+                        .values(status="READY_PARTIAL"),
+                    )
+            logger.info(
+                "document_ready_partial",
+                document_id=str(document_id),
+                graph_success=graph_success,
+                embedding_success=embedding_success,
+            )
+        else:
+            logger.info(
+                "document_fully_processed",
+                document_id=str(document_id),
+            )
 
     except Exception as exc:  # noqa: BLE001
         async with async_session_maker() as db:
@@ -197,7 +298,6 @@ async def answer_question_with_cache(
         len(ready_docs) == 1
         and ready_docs[0].gemini_cache_name is not None
     ):
-        # Option 1: Single cached document via Context Caching API.
         model = genai.GenerativeModel.from_cached_content(  # type: ignore[attr-defined]
             cached_content=ready_docs[0].gemini_cache_name,
         )
@@ -208,7 +308,6 @@ async def answer_question_with_cache(
             document_id=str(ready_docs[0].id),
         )
     else:
-        # Option 2: Multi-document or uncached, inline context.
         model = genai.GenerativeModel(  # type: ignore[attr-defined]
             model_name="gemini-1.5-pro-002",
             system_instruction=system_instruction,
@@ -226,7 +325,6 @@ async def answer_question_with_cache(
             documents=len(ready_docs),
         )
 
-    # Execute LLM call with structured outputs enforced via response_schema.
     response = await asyncio.to_thread(
         model.generate_content,
         prompt,
@@ -238,4 +336,3 @@ async def answer_question_with_cache(
     )
 
     return KnowledgeAnswer.model_validate_json(response.text)
-

@@ -43,10 +43,15 @@ class KnowledgeDocument(Base):
         DateTime(timezone=True),
         default=func.now(),
     )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        onupdate=func.now(),
+    )
 
     __table_args__ = (
         CheckConstraint(
-            "status IN ('PENDING', 'PROCESSING', 'READY', 'ERROR')",
+            "status IN ('PENDING', 'PROCESSING', 'READY', 'READY_PARTIAL', 'ERROR')",
             name="ck_knowledge_status_valid",
         ),
     )

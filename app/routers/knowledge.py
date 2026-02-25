@@ -12,6 +12,7 @@ from app.schemas.knowledge import (
     CacheRefreshingResponse,
     DocumentIngestRequest,
     KnowledgeAnswer,
+    QueryMode,
 )
 from app.services.knowledge_orchestrator import (
     orchestrate_ingestion,
@@ -72,10 +73,19 @@ async def query_knowledge(
     project_id: UUID,
     question: str,
     background_tasks: BackgroundTasks,
+    mode: QueryMode = "hybrid",
     db: AsyncSession = Depends(get_db),
 ) -> Any:
-    """Query the knowledge base for a project using cached document context."""
-    result = await orchestrate_query(project_id, question, background_tasks, db)
+    """Query the knowledge base for a project using cached document context.
+
+    Supports three query modes:
+    - 'local':  Entity-level via pgvector + CTE traversal.
+    - 'global': Community summaries.
+    - 'hybrid': Local → Global with confidence gating (default).
+    """
+    result = await orchestrate_query(
+        project_id, question, background_tasks, db, mode=mode
+    )
 
     if result is None:
         raise HTTPException(
