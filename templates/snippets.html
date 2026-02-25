@@ -26,11 +26,34 @@
                     d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
                 ></path>
             </svg>
-            <span>Processing document on Google File API...</span>
+            <span>Processing document...</span>
         </div>
     {% elif status == "READY" %}
         <div class="rounded-lg bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800">
             ✓ Document is READY and cached!
+        </div>
+    {% elif status == "READY_PARTIAL" %}
+        <div class="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            <svg
+                class="mt-0.5 h-5 w-5 shrink-0 text-amber-500"
+                xmlns="http://www.w3.org/2000/svg"
+                fill="none"
+                viewBox="0 0 24 24"
+            >
+                <path
+                    stroke="currentColor"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    d="M12 9v4m0 4h.01M10.29 3.86 3.82 15a2 2 0 0 0 1.71 3h12.94a2 2 0 0 0 1.71-3l-6.47-11.14a2 2 0 0 0-3.42 0Z"
+                />
+            </svg>
+            <div>
+                <p class="font-medium">Document READY (partial graph).</p>
+                <p class="text-xs text-amber-700/80">
+                    O grafo não foi extraído completamente, mas o cache de documentos está disponível. Consultas híbridas podem usar fallback para o cache.
+                </p>
+            </div>
         </div>
     {% elif status == "ERROR" %}
         <div class="rounded-lg bg-red-50 px-3 py-2 text-sm font-medium text-red-800">
@@ -67,6 +90,23 @@
             </div>
         {% endif %}
 
+        {% if answer_obj.graph_citations is defined and answer_obj.graph_citations %}
+            <div class="mt-4">
+                <strong class="text-sm font-medium text-gray-600">Graph citations</strong>
+                <div class="mt-2 flex flex-wrap gap-2">
+                    {% for c in answer_obj.graph_citations %}
+                        <button
+                            type="button"
+                            class="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-800 hover:bg-emerald-100"
+                            title="{{ c.snippet }}"
+                        >
+                            {{ c.source or "graph_entity" }}
+                        </button>
+                    {% endfor %}
+                </div>
+            </div>
+        {% endif %}
+
         {% if answer_obj.citations %}
             <div class="mt-4">
                 <strong class="text-sm font-medium text-gray-600">Citations</strong>
@@ -82,11 +122,11 @@
     </div>
 {% endmacro %}
 
-{% macro qa_refreshing(project_id, question) %}
+{% macro qa_refreshing(project_id, question, mode) %}
     <div
         class="flex items-center gap-2 rounded-lg bg-prumo-50 px-3 py-2 text-sm text-prumo-800"
         hx-post="/ui/query"
-        hx-vals='{"project_id": "{{ project_id }}", "question": "{{ question }}"}'
+        hx-vals='{"project_id": "{{ project_id }}", "question": "{{ question }}", "mode": "{{ mode }}"}'
         hx-trigger="every 3s"
         hx-swap="outerHTML"
     >

@@ -41,6 +41,7 @@ POLL_INTERVAL = 2
 def _upload_and_wait_for_active(
     tmp_path: str,
     display_name: str,
+    mime_type: str,
     max_wait: int = MAX_POLL_SECONDS,
 ) -> Any:
     """Upload a file and poll until it becomes ACTIVE.
@@ -49,7 +50,7 @@ def _upload_and_wait_for_active(
     """
     uploaded_file: Any = genai.upload_file(  # type: ignore[attr-defined]
         tmp_path,
-        mime_type="text/plain",
+        mime_type=mime_type,
         display_name=display_name,
     )
     elapsed = 0
@@ -107,6 +108,7 @@ async def process_document_task(document_id: UUID) -> None:
                         KnowledgeDocument.raw_content,
                         KnowledgeDocument.title,
                         KnowledgeDocument.project_id,
+                        KnowledgeDocument.metadata_json,
                     ).where(KnowledgeDocument.id == document_id)
                 )
                 row = result.first()
@@ -117,19 +119,34 @@ async def process_document_task(document_id: UUID) -> None:
         raw_content = row[0]
         title = row[1]
         project_id = row[2]
+        metadata: dict[str, Any] = row[3] or {}
 
         if raw_content is None:
             return
 
+        is_binary_upload = bool(metadata.get("is_binary_upload"))
+        encoding = str(metadata.get("encoding") or "utf-8")
+        content_type = str(metadata.get("content_type") or "text/plain")
+        file_suffix = str(metadata.get("file_suffix") or ".txt")
+
         # ── Branch A: File API + Context Caching ──
-        fd, tmp_path = tempfile.mkstemp(suffix=".txt", text=True)
-        with os.fdopen(fd, "w") as file:
-            file.write(raw_content)
+        if is_binary_upload:
+            raw_bytes = raw_content.encode(encoding)
+            fd, tmp_path = tempfile.mkstemp(suffix=file_suffix, text=False)
+            with os.fdopen(fd, "wb") as file:
+                file.write(raw_bytes)
+            upload_mime = content_type
+        else:
+            fd, tmp_path = tempfile.mkstemp(suffix=".txt", text=True)
+            with os.fdopen(fd, "w") as file:
+                file.write(raw_content)
+            upload_mime = "text/plain"
 
         file_info = await asyncio.to_thread(
             _upload_and_wait_for_active,
             tmp_path,
             title,
+            upload_mime,
         )
 
         try:

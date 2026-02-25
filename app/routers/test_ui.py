@@ -20,7 +20,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.knowledge import KnowledgeDocument
-from app.schemas.knowledge import CacheRefreshingResponse, DocumentIngestRequest
+from app.schemas.knowledge import (
+    CacheRefreshingResponse,
+    DocumentIngestRequest,
+    QueryMode,
+)
 from app.services.knowledge_orchestrator import (
     orchestrate_ingestion,
     orchestrate_query,
@@ -37,7 +41,7 @@ async def dashboard(request: Request) -> HTMLResponse:
 
 
 def _read_upload_content(upload: UploadFile) -> str:
-    """Read file content with UTF-8 fallback to latin-1."""
+    """Read text file content with UTF-8 fallback to latin-1."""
     raw = upload.file.read()
     try:
         return raw.decode("utf-8")
@@ -53,30 +57,89 @@ async def ui_ingest(
     title: str | None = Form(None),
     content: str | None = Form(None),
     source_type: str = Form(...),
-    file: UploadFile | None = File(None),
+    files: list[UploadFile] | None = File(None),
     db: AsyncSession = Depends(get_db),
-) -> HTMLResponse:
-    """Handle document ingestion: paste (title+content) or file upload."""
-    if file and file.filename:
-        content_from_file = _read_upload_content(file)
-        final_title = (title or "").strip() or file.filename
-        final_content = content_from_file
-    else:
-        if not content or not (title or "").strip():
+    ) -> HTMLResponse:
+    """Handle document ingestion: paste (title+content) or file upload (single/multiple)."""
+    docs: list[KnowledgeDocument] = []
+
+    if files:
+        for upload in files:
+            if not upload or not upload.filename:
+                continue
+
+            filename = upload.filename
+            content_type = (upload.content_type or "").lower()
+            is_pdf = filename.lower().endswith(".pdf") or content_type == "application/pdf"
+
+            # Read file bytes asynchronously to avoid blocking the event loop.
+            raw_bytes = await upload.read()
+
+            metadata: dict[str, object] | None = None
+
+            if is_pdf:
+                # Preserve binary PDF bytes via latin-1 round-trip and mark metadata
+                # so the background task can reconstruct and upload as application/pdf.
+                binary_text = raw_bytes.decode("latin-1")
+                final_title = (title or "").strip() or filename
+                final_content = binary_text
+                metadata = {
+                    "is_binary_upload": True,
+                    "source_filename": filename,
+                    "content_type": content_type or "application/pdf",
+                    "encoding": "latin-1",
+                    "file_suffix": ".pdf",
+                }
+            else:
+                # Treat as text file; keep existing behavior with charset fallback.
+                try:
+                    text_content = raw_bytes.decode("utf-8")
+                except UnicodeDecodeError:
+                    text_content = raw_bytes.decode("latin-1")
+                final_title = (title or "").strip() or filename
+                final_content = text_content
+
+            ingest_req = DocumentIngestRequest(
+                project_id=project_id,
+                title=final_title,
+                content=final_content,
+                source_type=source_type,
+                metadata=metadata,
+            )
+            doc, _ = await orchestrate_ingestion(ingest_req, background_tasks, db)
+            docs.append(doc)
+
+        if not docs:
             error_html = (
                 "<div class='rounded-lg bg-red-50 px-3 py-2 text-sm "
-                "font-medium text-red-800'>Preencha título e conteúdo "
-                "ou anexe um arquivo.</div>"
+                "font-medium text-red-800'>Nenhum arquivo válido foi selecionado.</div>"
             )
             return HTMLResponse(content=error_html)
-        final_title = title.strip() if title else ""
-        final_content = content or ""
+
+        template_str = (
+            "{% from 'snippets.html' import status_polling %}"
+            "{% for d in docs %}{{ status_polling(d.id, 'PROCESSING') }}{% endfor %}"
+        )
+        html = templates.env.from_string(template_str).render(docs=docs)
+        return HTMLResponse(content=html)
+
+    if not content or not (title or "").strip():
+        error_html = (
+            "<div class='rounded-lg bg-red-50 px-3 py-2 text-sm "
+            "font-medium text-red-800'>Preencha título e conteúdo "
+            "ou anexe um arquivo.</div>"
+        )
+        return HTMLResponse(content=error_html)
+
+    final_title = title.strip() if title else ""
+    final_content = content or ""
 
     ingest_req = DocumentIngestRequest(
         project_id=project_id,
         title=final_title,
         content=final_content,
         source_type=source_type,
+        metadata=None,
     )
     doc, _ = await orchestrate_ingestion(ingest_req, background_tasks, db)
 
@@ -135,11 +198,18 @@ async def ui_query(
     background_tasks: BackgroundTasks,
     project_id: UUID = Form(...),
     question: str = Form(...),
+    mode: QueryMode = Form("hybrid"),
     db: AsyncSession = Depends(get_db),
 ) -> HTMLResponse:
     """Execute a knowledge query from the HTMX UI."""
     try:
-        result = await orchestrate_query(project_id, question, background_tasks, db)
+        result = await orchestrate_query(
+            project_id,
+            question,
+            background_tasks,
+            db,
+            mode=mode,
+        )
 
         if result is None:
             return HTMLResponse(
@@ -155,11 +225,12 @@ async def ui_query(
 
             template_str = (
                 "{% from 'snippets.html' import qa_refreshing %}"
-                "{{ qa_refreshing(project_id, question) }}"
+                "{{ qa_refreshing(project_id, question, mode) }}"
             )
             html = templates.env.from_string(template_str).render(
                 project_id=project_id,
                 question=question,
+                mode=mode,
             )
             return HTMLResponse(content=html)
 
