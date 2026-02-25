@@ -1,0 +1,35 @@
+# Environment
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+.toast
++.vulture
+*.manifest
+*.spec
+
+# Tools
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.ipynb_checkpoints
+
+# OS & IDEs
+.DS_Store
+.vscode/
+.idea/
+
+# Project specific
+/logs/
+/tmp/

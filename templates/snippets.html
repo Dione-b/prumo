@@ -1,0 +1,116 @@
+{% macro status_polling(doc_id, status, error=None) %}
+    {% if status == "PROCESSING" %}
+        <div
+            class="flex items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800"
+            hx-get="/ui/status/{{ doc_id }}"
+            hx-trigger="every 2s"
+            hx-swap="outerHTML"
+        >
+            <svg
+                class="h-5 w-5 shrink-0 animate-spin text-amber-600"
+                xmlns="http://www.w3.org/2000/svg"
+                fill="none"
+                viewBox="0 0 24 24"
+            >
+                <circle
+                    class="opacity-25"
+                    cx="12"
+                    cy="12"
+                    r="10"
+                    stroke="currentColor"
+                    stroke-width="4"
+                ></circle>
+                <path
+                    class="opacity-75"
+                    fill="currentColor"
+                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                ></path>
+            </svg>
+            <span>Processing document on Google File API...</span>
+        </div>
+    {% elif status == "READY" %}
+        <div class="rounded-lg bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800">
+            ✓ Document is READY and cached!
+        </div>
+    {% elif status == "ERROR" %}
+        <div class="rounded-lg bg-red-50 px-3 py-2 text-sm font-medium text-red-800">
+            ✗ Error: {{ error }}
+        </div>
+    {% endif %}
+{% endmacro %}
+
+{% macro qa_answer(answer_obj) %}
+    <div class="rounded-xl border border-gray-200 bg-gray-50/80 p-5 shadow-sm">
+        <div class="flex flex-wrap items-start justify-between gap-2">
+            <h3 class="font-semibold text-gray-900">Answer</h3>
+            <span
+                class="inline-flex shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold
+                    {% if answer_obj.confidence_level == 'HIGH' %} bg-emerald-100 text-emerald-800
+                    {% elif answer_obj.confidence_level == 'MEDIUM' %} bg-amber-100 text-amber-800
+                    {% else %} bg-red-100 text-red-800 {% endif %}"
+            >
+                {{ answer_obj.confidence_level }} CONFIDENCE
+            </span>
+        </div>
+        <p class="mt-3 whitespace-pre-wrap text-gray-700">
+            {{ answer_obj.answer }}
+        </p>
+
+        {% if answer_obj.warnings %}
+            <div class="mt-4 rounded-lg border border-red-200 bg-red-50/80 p-3 text-sm text-red-700">
+                <strong class="font-medium">Warnings</strong>
+                <ul class="mt-1 list-disc pl-5">
+                    {% for w in answer_obj.warnings %}
+                        <li>{{ w }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+        {% endif %}
+
+        {% if answer_obj.citations %}
+            <div class="mt-4">
+                <strong class="text-sm font-medium text-gray-600">Citations</strong>
+                <ul class="mt-2 space-y-2">
+                    {% for c in answer_obj.citations %}
+                        <li class="rounded-lg border border-gray-200 border-l-4 border-l-prumo-400 bg-white p-3 text-sm text-gray-600 shadow-sm">
+                            "{{ c.snippet }}"
+                        </li>
+                    {% endfor %}
+                </ul>
+            </div>
+        {% endif %}
+    </div>
+{% endmacro %}
+
+{% macro qa_refreshing(project_id, question) %}
+    <div
+        class="flex items-center gap-2 rounded-lg bg-prumo-50 px-3 py-2 text-sm text-prumo-800"
+        hx-post="/ui/query"
+        hx-vals='{"project_id": "{{ project_id }}", "question": "{{ question }}"}'
+        hx-trigger="every 3s"
+        hx-swap="outerHTML"
+    >
+        <svg
+            class="h-5 w-5 shrink-0 animate-spin text-prumo-600"
+            xmlns="http://www.w3.org/2000/svg"
+            fill="none"
+            viewBox="0 0 24 24"
+        >
+            <circle
+                class="opacity-25"
+                cx="12"
+                cy="12"
+                r="10"
+                stroke="currentColor"
+                stroke-width="4"
+            ></circle>
+            <path
+                class="opacity-75"
+                fill="currentColor"
+                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+            ></path>
+        </svg>
+        <span>Cache is stale. Refreshing context...</span>
+    </div>
+{% endmacro %}
+

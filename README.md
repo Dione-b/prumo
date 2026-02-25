@@ -1,115 +1,135 @@
-# Prumo
+# 📐 Prumo
 
-> Context orchestration engine for agentic IDEs.
+> **Alignment and Precision for Agentic Workflows.**
 
-Prumo acts as a semantic ingestion pipeline that processes raw, unstructured text (such as chaotic meeting transcripts, rapid notes, or disjointed emails) and transforms it into highly structured, validated business rules.
+[![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.111.0+-009688.svg)](https://fastapi.tiangolo.com/)
+[![Pydantic](https://img.shields.io/badge/Pydantic-v2-e92063.svg)](https://docs.pydantic.dev/)
+[![Linter](https://img.shields.io/badge/Linter-Ruff-orange.svg)](https://github.com/astral-sh/ruff)
+[![Typing](https://img.shields.io/badge/Typing-MyPy-2196F3.svg)](https://mypy-lang.org/)
 
-By eliminating the "Garbage In, Garbage Out" problem, Prumo ensures that ai-assisted coding agents (like Cursor, Windsurf, etc.) receive clean, relevant, and well-structured context, eventually powering high-precision vector searches (RAG).
+**Prumo** (Portuguese for _Plumb Line_) is a high-performance context orchestration engine designed for agentic IDEs (like Cursor, Windsurf, or custom AI agents). It acts as the "straight line" that aligns raw, unstructured input with the rigorous requirements of automated development.
 
-## 🚀 Features (Phase 1)
+It transforms messy data—meeting transcripts, ephemeral notes, and shifting RFCs—into structured business rules and a queryable, semantic knowledge base optimized for RAG (Retrieval-Augmented Generation).
 
-- **Semantic Ingestion**: Uses Google Gemini 1.5 Pro to parse messy text and extract key structural data (Client Name, Core Objective, Technical Constraints, Acceptance Criteria).
-- **Dual-Layer Defense**:
-  - LLM native JSON generation (`response_mime_type="application/json"`).
-  - Pre-flight JSON sanitization stripping formatting artifacts (e.g., markdown fences) before parsing.
-- **Application-Side Intelligence**: Pydantic `@model_validator` generates real-time warnings (e.g., missing acceptance criteria, low confidence extraction) so humans can course-correct bad inputs before ingestion.
-- **pgvector Ready**: Data is persisted in PostgreSQL. The schema is initialized with the `vector` extension, ready for Phase 2 embeddings and semantic search.
+---
 
-## 🛠 Tech Stack
+## 🛠 Core Pillars
 
-- **Environment**: [uv](https://github.com/astral-sh/uv)
-- **Framework**: FastAPI (Async)
-- **Validation**: Pydantic v2
-- **ORM & Database**: SQLAlchemy 2.0 (async mode via `asyncpg`) + PostgreSQL
-- **Migrations**: Alembic (via `psycopg2-binary`)
-- **LLM Integration**: Google Gemini 1.5 Pro (`google-generativeai`)
+### 1. Semantic Ingestion (Phase 1)
+
+- **Gemini-Powered Extraction**: Leverages Gemini 1.5 Pro to distill structured data (Technical Constraints, Acceptance Criteria, Core Objectives) from unstructured text.
+- **Validation-as-Logic**: Uses Pydantic `@model_validator` to provide real-time feedback (warnings on low confidence or missing criteria) before ingestion.
+- **Pre-flight Sanitization**: Native LLM JSON generation coupled with robust sanitization to ensure high-fidelity parsing.
+
+### 2. Context Orchestration & RAG (Phase 2)
+
+- **Hybrid Cache Routing**: Orchestrates context using Gemini's **Context Caching** for massive documents and inline RAG for smaller fragments.
+- **Async Processing Pipeline**: Heavy uploads and document embeddings run in the background, keeping the API responsive (202 Accepted pattern).
+- **pgvector Integration**: Native vector search support for long-term semantic retrieval.
+
+### 3. Developer Experience & Quality
+
+- **HTMX Playground**: A lightweight testing interface at `/ui/` for rapid prototyping without frontend overhead.
+- **Rigorous Standard**: 100% type-hinted (MyPy strict) and linted (Ruff) codebase following clean code principles.
+- **Autonomous Documentation**: Structured QA responses with confidence levels, citations, and semantic warnings.
+
+---
+
+## 🚀 Tech Stack
+
+- **Core**: FastAPI (Async Python 3.11+)
+- **Validation**: Pydantic v2 (Strict typing & validation)
+- **Intelligence**: Google Gemini 1.5 Pro (Extraction & Context Caching)
+- **Storage**: SQLAlchemy 2.0 + PostgreSQL + `pgvector`
+- **Quality**: `ruff` (Linter), `mypy` (Type checking), `pytest` (Test suite)
+- **Deployment & Flow**: `uv` (Environment management), `alembic` (Migrations), `tenacity` (Resiliency)
+
+---
 
 ## ⚙️ Getting Started
 
 ### Prerequisites
 
-- Python 3.11+
-- `uv` installed
-- PostgreSQL with `pgvector` running (e.g., Docker image `pgvector/pgvector:pg16`)
+- Python 3.11+ and [uv](https://github.com/astral-sh/uv).
+- PostgreSQL with `pgvector` (e.g., `pgvector/pgvector:pg16` Docker image).
 
 ### Installation
 
-1. **Clone and install dependencies**:
+1.  **Sync Environment**:
 
-   ```bash
-   # uv will automatically handle the virtual environment
-   uv sync
-   ```
+    ```bash
+    uv sync
+    ```
 
-2. **Configuration**:
-   Copy the example environment file and add your credentials.
+2.  **Configure Credentials**:
 
-   ```bash
-   cp .env.example .env
-   ```
+    ```bash
+    cp .env.example .env
+    # Set GEMINI_API_KEY, DATABASE_URL, and API_KEY in .env
+    ```
 
-   _Make sure to paste your actual `GEMINI_API_KEY` and update the `DATABASE_URL` if necessary._
+3.  **Database Migration**:
 
-3. **Database Setup**:
-   Ensure your Postgres database is running. Then, apply the migrations to create the schema and enable the `vector` extension.
+    ```bash
+    uv run alembic upgrade head
+    ```
 
-   ```bash
-   uv run alembic upgrade head
-   ```
+4.  **Fire it up**:
+    ```bash
+    uv run uvicorn app.main:app --reload
+    ```
+    Access the interactive docs at: [http://localhost:8000/docs](http://localhost:8000/docs)
 
-4. **Run the Application**:
+---
 
-   ```bash
-   uv run uvicorn app.main:app --reload
-   ```
+## 🧪 Quality & Testing
 
-   The API will be available at `http://localhost:8000`. You can access the interactive Swagger documentation at `http://localhost:8000/docs`.
+We maintain high standards through automated checks and comprehensive testing.
 
-## 📖 Usage
+- **Run Linters & Checks**:
 
-### 1. Create a Project
+  ```bash
+  uv run ruff check .
+  uv run mypy .
+  ```
 
-Before ingesting raw notes, you need a project container.
+- **Run Test Suite**:
+  ```bash
+  uv run pytest
+  ```
 
-```bash
-curl -X 'POST' \
-  'http://localhost:8000/projects' \
-  -H 'Content-Type: application/json' \
-  -d '{
-  "name": "Alpha Migration",
-  "description": "Legacy system migration to cloud"
-}'
-```
+---
 
-_(Copy the `id` from the response)._
+## 📖 Usage Highlights
 
-### 2. Ingest Business Rules
+### Ingesting Business Rules
 
-Send raw, unstructured meeting notes or text to the engine. It will automatically extract the requirements, evaluate confidence, and return warnings if the text is too ambiguous.
+Send raw transcripts; receive structured, validated JSON.
 
 ```bash
-curl -X 'POST' \
-  'http://localhost:8000/ingest/business' \
-  -H 'Content-Type: application/json' \
-  -d '{
-  "project_id": "<PASTE_PROJECT_ID_HERE>",
-  "raw_text": "so man jm2 wants that system y'\''know... like to grade thesis, oh and it has to be in python i think, or was it js? don'\''t remember, i'\''ll check later... john said it needs to be ready by the end of next month but then the deadline changed i dunno, and it has to integrate with their database but don'\''t know which one. mary said it needs approval before sending to the student but it wasn'\''t clear how",
-  "source": "meeting_transcript_2024.txt"
-}'
+curl -X 'POST' http://localhost:8000/ingest/business \
+  -H 'X-API-Key: <YOUR_KEY>' \
+  -d '{"project_id": "...", "raw_text": "we need a python api with jwt auth..."}'
 ```
 
-**Expected Response**:
-The engine will return a strictly typed JSON containing the `core_objective`, `technical_constraints`, an evaluation of the `confidence_level` (e.g., "LOW"), and application-generated `warnings` alerting you to review the original text.
+### Knowledge Query
 
-## 🌐 Language Policy / Localization
+Ask questions over the project's knowledge base.
 
-To ensure consistency and ease of maintenance across the codebase, **the entire project is implemented strictly in English (100%)**.
-This includes:
+```bash
+curl -X 'POST' 'http://localhost:8000/knowledge/query?project_id=...&question=How+is+auth+handled?'
+```
 
-- Architecture, Code & Documentation (e.g., functions, variables, logs).
-- Business Domain (Database columns, API payloads, Pydantic schemas).
-- Warnings generated by Pydantic validators.
-- LLM System Prompts.
+---
 
-**⚠️ Data Exception: Language-Agnostic Extraction**
-While the application explicitly uses English keys, the information extracted by the LLM preserves the original language of the inputted text. If meeting notes are in Portuguese or German, the JSON payload keys will be in English (`core_objective`, `technical_constraints`), but the text values will stay in the exact language and terminology used by the user. No automatic translation is applied to domain data.
+## 🌐 Language Policy
+
+- **Code & Logic**: 100% English (Architecture, variables, logs, schemas).
+- **Data Preservation**: While keys are English, the extracted content preserves the **original language** of the input (Portuguese, Spanish, etc.) to maintain domain fidelity.
+
+---
+
+<p align="center">
+  <i>Part of the Prumo Context Orchestration Suite.</i>
+</p>
