@@ -69,6 +69,65 @@ async def orchestrate_ingestion(
     return new_doc, False
 
 
+async def orchestrate_batch_ingestion(
+    requests: list[DocumentIngestRequest],
+    background_tasks: BackgroundTasks,
+    db: AsyncSession,
+) -> list[KnowledgeDocument]:
+    """Create or reuse multiple knowledge documents and schedule background processing.
+
+    Returns the list of documents created or reused.
+    """
+    if not requests:
+        return []
+
+    project_id = requests[0].project_id
+    titles = [req.title for req in requests]
+    source_types = list({req.source_type for req in requests})
+
+    # Fetch existing documents in one query
+    stmt = select(KnowledgeDocument).where(
+        KnowledgeDocument.project_id == project_id,
+        KnowledgeDocument.title.in_(titles),
+        KnowledgeDocument.source_type.in_(source_types),
+    )
+    result = await db.execute(stmt)
+    existing_docs = {
+        (doc.title, doc.source_type): doc
+        for doc in result.scalars().all()
+        if doc.status in ("PROCESSING", "READY", "READY_PARTIAL")
+    }
+
+    final_docs: list[KnowledgeDocument] = []
+    new_docs: list[KnowledgeDocument] = []
+
+    for req in requests:
+        existing = existing_docs.get((req.title, req.source_type))
+        if existing:
+            final_docs.append(existing)
+            continue
+
+        new_doc = KnowledgeDocument(
+            project_id=req.project_id,
+            title=req.title,
+            source_type=req.source_type,
+            raw_content=req.content,
+            metadata_json=req.metadata,
+            status="PROCESSING",
+        )
+        db.add(new_doc)
+        new_docs.append(new_doc)
+        final_docs.append(new_doc)
+
+    if new_docs:
+        await db.commit()
+        for doc in new_docs:
+            await db.refresh(doc)
+            background_tasks.add_task(process_document_task, doc.id)
+
+    return final_docs
+
+
 async def orchestrate_query(
     project_id: UUID,
     question: str,

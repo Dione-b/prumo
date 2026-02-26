@@ -18,21 +18,24 @@ It transforms messy data—meeting transcripts, ephemeral notes, and shifting RF
 
 ### 1. Semantic Ingestion (Phase 1)
 
-- **Gemini-Powered Extraction**: Leverages Gemini 1.5 Pro to distill structured data (Technical Constraints, Acceptance Criteria, Core Objectives) from unstructured text.
-- **Validation-as-Logic**: Uses Pydantic `@model_validator` to provide real-time feedback (warnings on low confidence or missing criteria) before ingestion.
-- **Pre-flight Sanitization**: Native LLM JSON generation coupled with robust sanitization to ensure high-fidelity parsing.
+- **Multi-File & Binary Streaming**: Synchronous batch ingestion for raw text, PDFs, and DOCX files. Heavy binaries stream directly to disk without memory spikes. Incorporates real-time `pypdf` extraction to handle latin-1 encoded PDF buffers reliably.
+- **Local Native Async Extraction**: Routes structured data extraction (Business Rules) to **Llama 3.2** via a local Ollama instance utilizing the **Ollama 2026 SDK** with Native Tool Calling and automated Pydantic schema conversion.
+- **VRAM-Safe Orchestration**: A strict sequential orchestration uses a global semaphore (`max_concurrent=1`) and aggressive model offloading (`keep_alive=0`) to ensure extraction and embeddings never overlap, protecting RTX 2025 GPUs from OOM failures.
+- **Thinking & Downgrade Resilience (C_01)**: Captures model `thinking` traces to audit high-fidelity rules. Contradictory reasoning or hardware timeouts trigger graceful degradation, adjusting AI confidence downward instead of breaking the batch.
+- **Transactional Consistency (C_03)**: Uses nested DB transactions/savepoints where the background task orchestrator acts as the sole boundary owner.
 
 ### 2. Context Orchestration & RAG (Phase 2)
 
+- **Project Context Engine**: Enforces referential integrity by automatically bootstrapping default workspaces on app startup, completely eliminating hardcoded UUIDs.
 - **Hybrid Cache Routing**: Orchestrates context using Gemini's **Context Caching** for massive documents and inline RAG for smaller fragments.
-- **Async Processing Pipeline**: Heavy uploads and document embeddings run in the background, keeping the API responsive (202 Accepted pattern).
+- **Async Processing Pipeline**: Heavy document embeddings and processing run smoothly to keep the API responsive.
 - **pgvector Integration**: Native vector search support for long-term semantic retrieval.
 
 ### 3. Graph-RAG with LightRAG Pattern (Phase 3)
 
-- **Knowledge Graph Extraction**: Automatically extracts entities and relations from ingested documents via Gemini Flash structured output.
-- **pgvector HNSW Index**: Entities are embedded with `text-embedding-004` (768d) and indexed via HNSW (`m=16`, `ef_construction=64`) for cosine similarity search.
-- **Community Detection**: Leiden algorithm (via `leidenalg` + `igraph`) discovers thematic clusters with Flash-generated summaries.
+- **Knowledge Graph Extraction**: Automatically extracts semantic entities and relations safely inside background tasks.
+- **pgvector HNSW Index**: Entities are locally embedded using **Qwen3 (via Ollama)** and indexed via pgvector HNSW (`m=16`, `ef_construction=64`) for cosine similarity search.
+- **Community Detection**: Leiden algorithm (via `leidenalg` + `igraph`) discovers thematic clusters.
 - **Three Query Modes**:
   - `local` — Entity-level: pgvector similarity → recursive CTE edge traversal → Pro synthesis.
   - `global` — Community-level: aggregated community summaries → Pro synthesis.
@@ -41,16 +44,16 @@ It transforms messy data—meeting transcripts, ephemeral notes, and shifting RF
 
 ### 4. Prompt Generation Engine (Phase 3b)
 
-- **PromptGeneratorService**: Generates structured YAML prompts for LLM agents using project-specific business rules, knowledge graph context, and best-practice patterns.
+- **Synthesis Engine**: Uses **Gemini 2.5 Pro** via `asyncio.to_thread` to synthesize context and assemble structured YAML prompts for downstream LLM agents.
 - **Tiered Strategy**: Classifies tasks as `SIMPLE` (entity-level context) or `COMPLEX` (community context + few-shot examples + code skeletons).
 - **Constitutional Constraints**: Injects C_01/C_02/C_03 invariants, project-specific technical constraints, and validation checklists automatically.
 - **Confidence-Aware Output**: Confidence is derived from graph availability and auto-downgraded when context is degraded.
 
 ### 5. Developer Experience & Quality
 
-- **HTMX Playground**: A lightweight testing interface at `/ui/` for rapid prototyping without frontend overhead.
-- **Rigorous Standard**: 100% type-hinted (MyPy strict) and linted (Ruff) codebase following clean code principles.
-- **Autonomous Documentation**: Structured QA responses with confidence levels, citations, and semantic warnings.
+- **HTMX Playground**: A lightweight testing interface at `/ui/dashboard` for rapid prototyping with robust CORS and session management.
+- **Rigorous Standard**: 100% type-hinted (MyPy strict), linted (Ruff), and backed by a comprehensive test suite (pytest, pytest-mock).
+- **Production Hardened**: Built with `tenacity` for resilient Gemini API retries and `structlog` for structured token-usage observability.
 
 ---
 
@@ -60,7 +63,7 @@ It transforms messy data—meeting transcripts, ephemeral notes, and shifting RF
 | -------------- | ---------------------------------------------------------------------------------------- |
 | **Core**       | FastAPI (Async Python 3.11+)                                                             |
 | **Validation** | Pydantic v2 (Strict typing & validation)                                                 |
-| **LLM**        | Gemini 1.5 Pro (synthesis), Flash (extraction), text-embedding-004 (768d)                |
+| **LLM**        | Gemini 2.5 Pro (Synthesis) & Local Ollama (Llama 3.2 / Qwen3 for Edge/Node processing)   |
 | **Storage**    | SQLAlchemy 2.0 + PostgreSQL + `pgvector` (HNSW)                                          |
 | **Graph**      | `igraph` + `leidenalg` (Leiden community detection)                                      |
 | **Quality**    | `ruff` (linter), `mypy` (typing), `pytest` (tests)                                       |
@@ -84,17 +87,23 @@ app/
 │   ├── knowledge.py                    # KnowledgeAnswer, AnswerCitation, QueryMode
 │   ├── graph.py                        # EntityExtractionResult, NodeContext, EdgeContext
 │   └── prompt_generator.py             # PromptTier, PromptStrategyConfig, GeneratedPrompt
+├── utils/
+│   └── tool_converter.py               # Pydantic to Ollama Native Tool conversion
 ├── services/
 │   ├── knowledge_gemini.py             # Document pipeline (Branches A+B+C)
-│   ├── knowledge_orchestrator.py       # Query routing (cache + graph modes)
-│   ├── graph_extractor.py              # Flash entity/relation extraction + upsert
-│   ├── embedding_service.py            # text-embedding-004 batch embedding
+│   ├── knowledge_orchestrator.py       # Query routing and batch ingestion handling
+│   ├── document_processor.py           # VRAM-Safe orchestrator (Extract -> Embed)
+│   ├── ollama_client.py                # Sequential local LLM access + Semaphore
+│   ├── graph_extractor.py              # Entity/relation extraction + upsert
+│   ├── embedding_service.py            # Local Qwen3 batch embedding
 │   ├── community_detector.py           # Leiden + community summaries
 │   ├── graph_query_service.py          # Local / Global / Hybrid query engines
 │   └── prompt_generator.py             # YAML prompt assembly for LLM agents
 └── routers/
+    ├── ingest.py                       # /ingest/business multi-file uploads
     ├── knowledge.py                    # /knowledge/documents, /knowledge/query
-    └── ingest.py                       # /ingest/business
+    ├── projects.py                     # Project contexts and bootstraps
+    └── test_ui.py                      # HTMX powered UI routes
 ```
 
 ---
@@ -119,7 +128,8 @@ app/
 
     ```bash
     cp .env.example .env
-    # Set GEMINI_API_KEY, DATABASE_URL, and API_KEY in .env
+    # Set GEMINI_API_KEY, DATABASE_URL, API_KEY and OLLAMA models in .env
+    # Note: Ensure an Ollama instance is running locally on port 11434.
     ```
 
 3.  **Database Migration**:

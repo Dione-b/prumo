@@ -27,9 +27,7 @@ class AnswerCitation(BaseModel):
     def coerce_source_from_entity(self) -> "AnswerCitation":
         """Ensure source is always populated for Phase 2 compatibility."""
         if self.source is None and self.document_id is not None:
-            object.__setattr__(
-                self, "source", f"doc:{self.document_id}"
-            )
+            object.__setattr__(self, "source", f"doc:{self.document_id}")
         return self
 
 
@@ -83,5 +81,3 @@ class CacheRefreshingResponse(BaseModel):
     status: str
     stale_document_ids: list[str]
     retry_after_seconds: int
-
-

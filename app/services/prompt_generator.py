@@ -13,6 +13,7 @@ Key invariants honored:
 
 from __future__ import annotations
 
+from typing import Literal
 from uuid import UUID
 
 import structlog
@@ -36,23 +37,25 @@ logger = structlog.get_logger()
 
 # ── Module-Level Constants ──────────────────────────────────────────────────
 
-_COMPLEX_KEYWORDS: frozenset[str] = frozenset({
-    "refactor",
-    "refatorar",
-    "migrate",
-    "migrar",
-    "redesign",
-    "architect",
-    "integrate",
-    "integrar",
-    "pipeline",
-    "multi-step",
-    "multi-file",
-    "graph-rag",
-    "lightrag",
-    "community",
-    "extraction",
-})
+_COMPLEX_KEYWORDS: frozenset[str] = frozenset(
+    {
+        "refactor",
+        "refatorar",
+        "migrate",
+        "migrar",
+        "redesign",
+        "architect",
+        "integrate",
+        "integrar",
+        "pipeline",
+        "multi-step",
+        "multi-file",
+        "graph-rag",
+        "lightrag",
+        "community",
+        "extraction",
+    }
+)
 
 _TIER_STRATEGIES: dict[PromptTier, list[str]] = {
     PromptTier.SIMPLE: [
@@ -93,60 +96,40 @@ _BASE_REQUIRED: list[str] = [
     "ALWAYS wrap every synchronous Gemini SDK call in asyncio.to_thread().",
     "ALWAYS provide complete files with all imports explicit at the top.",
     "ALWAYS annotate all public method return types (mypy --strict).",
-    "ALWAYS include updated_at in models that participate in"
-    " cache invalidation.",
+    "ALWAYS include updated_at in models that participate in cache invalidation.",
 ]
 
 _FEW_SHOT_EXAMPLES: dict[str, dict[str, str]] = {
     "ASYNC_PATTERN": {
-        "wrong": (
-            "result = genai.embed_content(model=m, content=text)"
-        ),
+        "wrong": ("result = genai.embed_content(model=m, content=text)"),
         "correct": (
             "result = await asyncio.to_thread("
             "genai.embed_content, model=m, content=text)"
         ),
-        "rule": (
-            "C_02 — Gemini SDK is synchronous;"
-            " never block the event loop"
-        ),
+        "rule": ("C_02 — Gemini SDK is synchronous; never block the event loop"),
     },
     "TRANSACTION_BOUNDARY": {
         "wrong": (
-            "await session.commit()  "
-            "# inside EntityExtractor.extract_and_upsert"
+            "await session.commit()  # inside EntityExtractor.extract_and_upsert"
         ),
         "correct": (
-            "# commit lives in process_document_task"
-            " after all branches succeed"
+            "# commit lives in process_document_task after all branches succeed"
         ),
         "rule": "C_03 — service is never the transaction owner",
     },
     "PYDANTIC_C01": {
-        "wrong": (
-            "self.confidence = 'LOW'  "
-            "# direct assign in frozen model_validator"
-        ),
-        "correct": (
-            "object.__setattr__(self, 'confidence', 'LOW')"
-        ),
-        "rule": (
-            "C_01 — Pydantic v2 frozen models"
-            " forbid direct field assignment"
-        ),
+        "wrong": ("self.confidence = 'LOW'  # direct assign in frozen model_validator"),
+        "correct": ("object.__setattr__(self, 'confidence', 'LOW')"),
+        "rule": ("C_01 — Pydantic v2 frozen models forbid direct field assignment"),
     },
     "UUID_ASYNCPG": {
-        "wrong": (
-            "session.execute("
-            "text('ANY(:ids)'), {'ids': uuid_list})"
-        ),
+        "wrong": ("session.execute(text('ANY(:ids)'), {'ids': uuid_list})"),
         "correct": (
             "session.execute(text('ANY(CAST(:ids AS uuid[]))'), "
             "{'ids': [str(u) for u in uuid_list]})"
         ),
         "rule": (
-            "asyncpg cannot adapt list[UUID] in text()"
-            " queries without explicit cast"
+            "asyncpg cannot adapt list[UUID] in text() queries without explicit cast"
         ),
     },
 }
@@ -162,7 +145,7 @@ _MAX_BUSINESS_RULES = 5
 
 
 class PromptGeneratorService:
-    """Generates structured YAML prompts for LLM agents.
+    """Synthesis Engine using Gemini 2.5 Pro.
 
     Orchestrates tier classification, constraint aggregation, graph context
     fetching, skeleton generation, and YAML assembly into a single pipeline.
@@ -179,9 +162,11 @@ class PromptGeneratorService:
         target_files: list[str],
         strategy_overrides: PromptStrategyConfig | None = None,
     ) -> GeneratedPrompt:
-        """Generate a structured YAML prompt for LLM code generation.
+        """Assembles YAML prompt for downstream agents.
 
-        C_03: NEVER commits — caller owns the transaction.
+        1. C_02: Wrap Gemini SDK calls in asyncio.to_thread().
+        2. C_01: Trigger confidence downgrade on partial graph context.
+        3. C_03: NEVER commits — caller owns the transaction.
 
         Args:
             session: Active async DB session (caller-owned).
@@ -202,9 +187,7 @@ class PromptGeneratorService:
             tier = cfg.force_tier
 
         # 2. Build constraints from project rules + base.
-        prohibited, required = await self._build_constraints(
-            session, project_id, cfg
-        )
+        prohibited, required = await self._build_constraints(session, project_id, cfg)
 
         # 3. Fetch local graph context.
         local_answer = await self._fetch_local_context(
@@ -220,13 +203,8 @@ class PromptGeneratorService:
 
         # 5. Build skeletons (COMPLEX + enabled).
         skeletons: list[dict[str, str]] = []
-        if (
-            tier == PromptTier.COMPLEX
-            and cfg.include_skeletons
-        ):
-            skeletons = self._build_skeletons(
-                target_files, local_answer
-            )
+        if tier == PromptTier.COMPLEX and cfg.include_skeletons:
+            skeletons = self._build_skeletons(target_files, local_answer)
 
         # 6. Assemble YAML.
         yaml_prompt = self._assemble_yaml(
@@ -313,9 +291,7 @@ class PromptGeneratorService:
                 project_constraints.extend(constraints_list)
 
         prohibited = (
-            list(_BASE_PROHIBITED)
-            + list(cfg.extra_prohibited)
-            + project_constraints
+            list(_BASE_PROHIBITED) + list(cfg.extra_prohibited) + project_constraints
         )
         required = list(_BASE_REQUIRED) + list(cfg.extra_required)
 
@@ -339,10 +315,7 @@ class PromptGeneratorService:
         try:
             answer = await local_query(session, project_id, task_intent)
 
-            if (
-                answer.confidence_level == "LOW"
-                and not answer.citations
-            ):
+            if answer.confidence_level == "LOW" and not answer.citations:
                 warnings.append("graph_local_unavailable")
 
             return answer
@@ -373,9 +346,7 @@ class PromptGeneratorService:
         Returns None if the global context is unavailable or low quality.
         """
         try:
-            answer = await global_query(
-                session, project_id, task_intent
-            )
+            answer = await global_query(session, project_id, task_intent)
 
             if answer.confidence_level == "LOW":
                 warnings.append("graph_global_unavailable")
@@ -426,10 +397,7 @@ class PromptGeneratorService:
             for symbol in file_symbols:
                 # Normalize to snake_case for function naming.
                 func_name = (
-                    symbol.lower()
-                    .replace(" ", "_")
-                    .replace("-", "_")
-                    .replace(".", "_")
+                    symbol.lower().replace(" ", "_").replace("-", "_").replace(".", "_")
                 )
                 skeleton = {
                     "file": target_file,
@@ -531,10 +499,7 @@ class PromptGeneratorService:
         prompt["execucao"] = execution
 
         # ── Few-Shot Block (Strategy 8: COMPLEX only) ──
-        if (
-            tier == PromptTier.COMPLEX
-            and cfg.include_few_shot
-        ):
+        if tier == PromptTier.COMPLEX and cfg.include_few_shot:
             prompt["exemplos_few_shot"] = _FEW_SHOT_EXAMPLES
 
         # ── Validation Block ──
@@ -542,8 +507,7 @@ class PromptGeneratorService:
             "checklist_estatico": [
                 "Nenhum session.commit() em services (C_03)",
                 "Todo genai.* em asyncio.to_thread() (C_02)",
-                "model_validator frozen usa"
-                " object.__setattr__ (C_01)",
+                "model_validator frozen usa object.__setattr__ (C_01)",
                 "YAML output parseável por yaml.safe_load",
             ],
         }
@@ -562,7 +526,7 @@ class PromptGeneratorService:
         global_ans: KnowledgeAnswer | None,
         tier: PromptTier,
         warnings: list[str],
-    ) -> str:
+    ) -> Literal["HIGH", "MEDIUM", "LOW"]:
         """Derive overall confidence from graph answers and warnings.
 
         Rules (in order of priority):

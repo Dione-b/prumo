@@ -7,11 +7,12 @@ from app.config import settings
 from app.database import get_db
 from app.logger import get_logger
 from app.schemas.business_rule import (
+    BusinessRuleSchema,
     IngestBusinessRequest,
     IngestBusinessResponse,
 )
 from app.services.business_rule import create_business_rule
-from app.services.gemini import extract_sanitized_business
+from app.services.llm_gateway import LLMGateway
 from app.services.project import get_project
 
 log = get_logger(__name__)
@@ -48,11 +49,11 @@ async def ingest_business(
             detail=f"Project {payload.project_id} not found",
         )
 
-    # 2. Extract structured data via Gemini
+    # 2. Extract structured data via Ollama Native Async (C_02)
     try:
-        result = await extract_sanitized_business(
-            payload.raw_text,
-            project_id=payload.project_id,
+        gateway = LLMGateway()
+        result = await gateway.extract_business_rules(
+            payload.raw_text, BusinessRuleSchema
         )
     except ValidationError:
         raise HTTPException(

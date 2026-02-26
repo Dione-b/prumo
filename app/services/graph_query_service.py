@@ -245,9 +245,7 @@ async def local_query(
     """LOCAL query: embed → pgvector → CTE expand → synthesis."""
     query_embedding = await _get_query_embedding(question)
 
-    similar_nodes = await _find_similar_nodes(
-        session, project_id, query_embedding
-    )
+    similar_nodes = await _find_similar_nodes(session, project_id, query_embedding)
 
     if not similar_nodes:
         return KnowledgeAnswer(
@@ -278,15 +276,19 @@ async def global_query(
 ) -> KnowledgeAnswer:
     """Execute a GLOBAL query: community summaries → synthesis."""
     # Fetch community summaries by aggregating node data per community.
-    stmt = select(
-        GraphNode.community_id,
-        func.count(GraphNode.id).label("member_count"),
-        func.array_agg(GraphNode.name),
-        func.array_agg(GraphNode.description),
-    ).where(
-        GraphNode.project_id == project_id,
-        GraphNode.community_id.is_not(None),
-    ).group_by(GraphNode.community_id)
+    stmt = (
+        select(
+            GraphNode.community_id,
+            func.count(GraphNode.id).label("member_count"),
+            func.array_agg(GraphNode.name),
+            func.array_agg(GraphNode.description),
+        )
+        .where(
+            GraphNode.project_id == project_id,
+            GraphNode.community_id.is_not(None),
+        )
+        .group_by(GraphNode.community_id)
+    )
 
     result = await session.execute(stmt)
     rows = result.all()
@@ -302,9 +304,7 @@ async def global_query(
     context_lines = ["=== COMMUNITY SUMMARIES ==="]
 
     for community_id, member_count, names, descriptions in rows:
-        summary_parts = [
-            f"{name}: {desc}" for name, desc in zip(names, descriptions)
-        ]
+        summary_parts = [f"{name}: {desc}" for name, desc in zip(names, descriptions)]
         summary = f"Community {community_id} ({member_count} members): " + "; ".join(
             summary_parts
         )

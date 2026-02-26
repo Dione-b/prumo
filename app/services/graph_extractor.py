@@ -4,26 +4,49 @@ Responsibility: extract entities and relations from text chunks, then
 upsert them into the graph tables. This service NEVER calls session.commit()
 — the transaction boundary belongs exclusively to the task owner
 (process_document_task).
+
+The `safe_extract_and_upsert` function wraps the full extraction pipeline
+in a resilient try/except that returns a structured report, allowing the
+caller to derive READY_PARTIAL status without aborting the entire batch.
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import uuid
+from dataclasses import dataclass
 from uuid import UUID
 
-import google.generativeai as genai  # type: ignore[import-untyped]
+import google.generativeai as genai
 import structlog
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.database import async_session_maker
 from app.models.graph import GraphEdge, GraphNode
 from app.schemas.graph import EntityExtractionResult, ExtractedEntity, ExtractedRelation
+from app.services.document_processor import DocumentProcessor
 
 logger = structlog.get_logger()
 
 genai.configure(api_key=settings.gemini_api_key.get_secret_value())  # type: ignore[attr-defined]
+
+
+@dataclass(frozen=True)
+class GraphExtractionReport:
+    """Immutable status report for a single document's graph extraction attempt."""
+
+    document_id: UUID
+    success: bool
+    entities_count: int = 0
+    relations_count: int = 0
+    error: str | None = None
+    skipped: bool = False
+    skip_reason: str | None = None
+
 
 # Rate-limit pause between Flash calls (≤1000 RPM → 60ms minimum).
 _FLASH_RATE_LIMIT_SECONDS = 0.06
@@ -131,6 +154,7 @@ async def upsert_graph_data(
     project_id: UUID,
     document_id: UUID,
     extraction: EntityExtractionResult,
+    embeddings: list[list[float]] | None = None,
 ) -> int:
     """Upsert extracted entities and relations into graph tables.
 
@@ -146,22 +170,23 @@ async def upsert_graph_data(
     doc_id_str = str(document_id)
     node_name_to_id: dict[str, uuid.UUID] = {}
 
-    # --- Upsert nodes ---
-    for entity in extraction.entities:
-        node_id = uuid.uuid4()
+    for i, entity in enumerate(extraction.entities):
+        hash_input = f"{entity.name}:{entity.entity_type}:{project_id}".encode()
+        node_id = uuid.UUID(hashlib.sha256(hash_input).hexdigest()[:32])
 
         upsert_stmt = text("""
             INSERT INTO graph_nodes (
                 id, project_id, name, entity_type,
-                description, source_document_ids
+                description, source_document_ids, embedding
             )
             VALUES (
                 :id, :project_id, :name, :entity_type,
-                :description, :source_doc_ids::jsonb
+                :description, :source_doc_ids::jsonb, :embedding
             )
             ON CONFLICT (project_id, name) DO UPDATE SET
                 description = EXCLUDED.description,
                 entity_type = EXCLUDED.entity_type,
+                embedding = COALESCE(EXCLUDED.embedding, graph_nodes.embedding),
                 source_document_ids = (
                     SELECT jsonb_agg(DISTINCT elem)
                     FROM jsonb_array_elements(
@@ -181,6 +206,11 @@ async def upsert_graph_data(
                 "entity_type": entity.entity_type,
                 "description": entity.description,
                 "source_doc_ids": f'["{doc_id_str}"]',
+                "embedding": (
+                    json.dumps(embeddings[i])
+                    if embeddings and i < len(embeddings)
+                    else None
+                ),
             },
         )
 
@@ -235,3 +265,88 @@ async def upsert_graph_data(
     )
 
     return len(node_name_to_id)
+
+
+async def safe_extract_and_upsert(
+    project_id: UUID,
+    document_id: UUID,
+    raw_content: str | None,
+    *,
+    is_binary: bool = False,
+) -> GraphExtractionReport:
+    """Resilient wrapper for the full graph extraction pipeline.
+
+    Runs entity extraction + graph upsert inside a savepoint-protected
+    independent session. Catches any exception and returns a structured
+    report instead of propagating — this way a single document failure
+    never rolls back the entire batch.
+
+    Args:
+        project_id: The project owning the document.
+        document_id: The document being processed.
+        raw_content: Text content for entity extraction. None for binaries.
+        is_binary: If True, skip extraction (binary files have no text).
+
+    Returns:
+        GraphExtractionReport with success/failure details.
+    """
+    if is_binary:
+        return GraphExtractionReport(
+            document_id=document_id,
+            success=True,
+            skipped=True,
+            skip_reason="binary files are processed via File API only",
+        )
+
+    if not raw_content:
+        return GraphExtractionReport(
+            document_id=document_id,
+            success=True,
+            skipped=True,
+            skip_reason="no raw_content available for extraction",
+        )
+
+    try:
+        processor = DocumentProcessor()
+        extraction, embeddings = await processor.process_document(raw_content)
+
+        if not extraction.entities:
+            return GraphExtractionReport(
+                document_id=document_id,
+                success=True,
+                skipped=True,
+                skip_reason="no entities found in content",
+            )
+
+        async with async_session_maker() as db:
+            async with db.begin():
+                async with db.begin_nested():
+                    await upsert_graph_data(
+                        db, project_id, document_id, extraction, embeddings
+                    )
+
+        logger.info(
+            "safe_extract_complete",
+            document_id=str(document_id),
+            entities=len(extraction.entities),
+            relations=len(extraction.relations),
+        )
+
+        return GraphExtractionReport(
+            document_id=document_id,
+            success=True,
+            entities_count=len(extraction.entities),
+            relations_count=len(extraction.relations),
+        )
+
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "safe_extract_failed",
+            document_id=str(document_id),
+            error=str(exc),
+        )
+        return GraphExtractionReport(
+            document_id=document_id,
+            success=False,
+            error=str(exc),
+        )

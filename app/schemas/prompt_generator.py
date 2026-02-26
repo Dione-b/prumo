@@ -14,11 +14,13 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.schemas.knowledge import AnswerCitation
 
 # Warning sentinel values that trigger confidence downgrade.
-_GRAPH_BLOCKING_WARNINGS = frozenset({
-    "graph_local_unavailable",
-    "graph_global_unavailable",
-    "graph_empty",
-})
+_GRAPH_BLOCKING_WARNINGS = frozenset(
+    {
+        "graph_local_unavailable",
+        "graph_global_unavailable",
+        "graph_empty",
+    }
+)
 
 
 class PromptTier(StrEnum):

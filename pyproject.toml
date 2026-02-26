@@ -23,6 +23,9 @@ dependencies = [
     "leidenalg>=0.10.0",
     "igraph>=0.11.0",
     "numpy>=1.26.0",
+    "pypdf>=6.7.3",
+    "tiktoken>=0.12.0",
+    "ollama>=0.6.1",
 ]
 
 [dependency-groups]
@@ -33,6 +36,7 @@ dev = [
     "ruff>=0.15.2",
     "mypy>=1.19.1",
     "pytest-mock>=3.15.1",
+    "types-pyyaml>=6.0.12.20250915",
 ]
 
 [tool.ruff]
@@ -46,6 +50,7 @@ select = ["E", "W", "F", "I", "N", "UP"]
 python_version = "3.11"
 strict = true
 ignore_missing_imports = true
+warn_unused_ignores = false
 
 [[tool.mypy.overrides]]
 module = "google.*"

@@ -1,6 +1,9 @@
+import io
 import json
 import re
 from typing import Any
+
+import pypdf
 
 from app.core.exceptions import SanitizationError
 
@@ -21,3 +24,26 @@ def sanitize_llm_json(raw_text: str) -> dict[str, Any]:
             f"Failed to parse JSON after sanitization. Error: {e}\n"
             f"Received text: {cleaned[:200]}"
         ) from e
+
+
+def extract_pdf_if_needed(raw_text: str) -> str:
+    """Detect if the text is a latin-1 decoded PDF and extract text via PyPDF.
+
+    This is required when binary PDFs were materialized as latin-1 strings.
+    """
+    if raw_text.startswith("%PDF-"):
+        try:
+            raw_bytes = raw_text.encode("latin-1")
+            reader = pypdf.PdfReader(io.BytesIO(raw_bytes))
+
+            pages_text = []
+            for page in reader.pages:
+                text = page.extract_text()
+                if text:
+                    pages_text.append(text)
+
+            return "\n".join(pages_text)
+        except Exception:
+            # If PyPDF fails to extract, fallback to original text.
+            pass
+    return raw_text

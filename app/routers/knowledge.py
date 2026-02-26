@@ -105,4 +105,3 @@ async def query_knowledge(
         )
 
     return result
-

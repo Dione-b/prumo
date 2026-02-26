@@ -51,9 +51,7 @@ class GraphNode(Base):
         nullable=False,
         server_default="'[]'::jsonb",
     )
-    community_id: Mapped[int | None] = mapped_column(
-        Integer, nullable=True
-    )
+    community_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         SADateTime(timezone=True),

@@ -2,19 +2,27 @@
 
 Three-branch architecture:
   Branch A: File API upload + Context Caching (Phase 2 — existing)
-  Branch B: Entity extraction via Flash + graph upsert
+  Branch B: Entity extraction via Flash + graph upsert (text-only)
   Branch C: Node embedding + community detection fire-and-forget
 
 If Branch A succeeds but B/C fail, status is set to READY_PARTIAL
 instead of ERROR — the document is usable for cache-based queries
 even without a complete knowledge graph.
+
+Binary files (PDF/DOCX) follow a streaming-only path:
+  - raw_content is NULL in the database
+  - temp_file_path in metadata points to the streamed file on disk
+  - Branch B is skipped (Gemini extracts from the file via File API)
 """
+
+from __future__ import annotations
 
 import asyncio
 import os
 import tempfile
 import time
 from datetime import timedelta
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
@@ -28,8 +36,7 @@ from app.database import async_session_maker
 from app.models.knowledge import KnowledgeDocument
 from app.schemas.knowledge import KnowledgeAnswer
 from app.services.community_detector import fire_community_detection
-from app.services.embedding_service import embed_new_nodes
-from app.services.graph_extractor import extract_entities_from_chunks, upsert_graph_data
+from app.services.graph_extractor import safe_extract_and_upsert
 
 logger = structlog.get_logger()
 genai.configure(api_key=settings.gemini_api_key.get_secret_value())  # type: ignore[attr-defined]
@@ -92,13 +99,20 @@ async def process_document_task(document_id: UUID) -> None:
 
     Architecture:
       Branch A: File API + Cache (C_03 — own session)
-      Branch B: Entity extraction + graph upsert (savepoint)
+      Branch B: Entity extraction + graph upsert (text-only; skipped for binaries)
       Branch C: Embedding + community detection (savepoint + fire-and-forget)
+
+    Binary documents (is_binary_upload=True):
+      - File is read from temp_file_path on disk (streamed, no RAM spike)
+      - raw_content is NULL — never materialized as string
+      - Branch B is skipped (entities extracted by Gemini via File API)
 
     If A succeeds but B/C fail, status is READY_PARTIAL — the document is
     usable for cache queries but the knowledge graph is incomplete.
     """
-    tmp_path: str | None = None
+    tmp_path_owned: str | None = None
+    tmp_path_from_router: str | None = None
+
     try:
         # ── Phase 1: Fetch document data ──
         async with async_session_maker() as db:
@@ -116,35 +130,49 @@ async def process_document_task(document_id: UUID) -> None:
         if row is None:
             return
 
-        raw_content = row[0]
-        title = row[1]
-        project_id = row[2]
+        raw_content: str | None = row[0]
+        title: str = row[1]
+        project_id: UUID = row[2]
         metadata: dict[str, Any] = row[3] or {}
 
-        if raw_content is None:
-            return
-
         is_binary_upload = bool(metadata.get("is_binary_upload"))
-        encoding = str(metadata.get("encoding") or "utf-8")
         content_type = str(metadata.get("content_type") or "text/plain")
-        file_suffix = str(metadata.get("file_suffix") or ".txt")
+        tmp_path_from_router = metadata.get("temp_file_path")
 
         # ── Branch A: File API + Context Caching ──
         if is_binary_upload:
-            raw_bytes = raw_content.encode(encoding)
-            fd, tmp_path = tempfile.mkstemp(suffix=file_suffix, text=False)
-            with os.fdopen(fd, "wb") as file:
-                file.write(raw_bytes)
+            # Binary: file already on disk (streamed by the router).
+            # NEVER attempt to convert bytes to string.
+            if tmp_path_from_router and Path(tmp_path_from_router).exists():
+                upload_path = tmp_path_from_router
+            else:
+                logger.error(
+                    "binary_temp_file_missing",
+                    document_id=str(document_id),
+                    expected_path=tmp_path_from_router,
+                )
+                raise FileNotFoundError(
+                    f"Temp file not found for binary document: {tmp_path_from_router}"
+                )
             upload_mime = content_type
         else:
-            fd, tmp_path = tempfile.mkstemp(suffix=".txt", text=True)
-            with os.fdopen(fd, "w") as file:
+            # Text: materialize content into a temp file for the File API.
+            if raw_content is None:
+                logger.warning(
+                    "text_document_no_content",
+                    document_id=str(document_id),
+                )
+                return
+
+            fd, tmp_path_owned = tempfile.mkstemp(suffix=".txt", text=True)
+            with os.fdopen(fd, "w", encoding="utf-8") as file:
                 file.write(raw_content)
+            upload_path = tmp_path_owned
             upload_mime = "text/plain"
 
         file_info = await asyncio.to_thread(
             _upload_and_wait_for_active,
-            tmp_path,
+            upload_path,
             title,
             upload_mime,
         )
@@ -189,56 +217,37 @@ async def process_document_task(document_id: UUID) -> None:
         )
 
         # ── Branch B: Entity Extraction + Graph Upsert ──
-        graph_success = False
-        try:
-            extraction = await extract_entities_from_chunks(raw_content)
+        # Delegates to safe_extract_and_upsert which owns its session,
+        # catches exceptions, and returns a structured report.
+        graph_report = await safe_extract_and_upsert(
+            project_id=project_id,
+            document_id=document_id,
+            raw_content=raw_content,
+            is_binary=is_binary_upload,
+        )
+        graph_success = graph_report.success
 
-            if extraction.entities:
-                async with async_session_maker() as db:
-                    async with db.begin():
-                        # Savepoint for atomicity — if this fails, Branch A
-                        # result is already committed.
-                        async with db.begin_nested():
-                            await upsert_graph_data(
-                                db, project_id, document_id, extraction
-                            )
-                        graph_success = True
-
-                logger.info(
-                    "branch_b_complete",
-                    document_id=str(document_id),
-                    entities=len(extraction.entities),
-                    relations=len(extraction.relations),
-                )
-            else:
-                logger.info(
-                    "branch_b_no_entities",
-                    document_id=str(document_id),
-                )
-                graph_success = True  # No entities is not a failure.
-
-        except Exception as exc:  # noqa: BLE001
+        if graph_report.skipped:
+            logger.info(
+                "branch_b_skipped",
+                document_id=str(document_id),
+                reason=graph_report.skip_reason,
+            )
+        elif not graph_report.success:
             logger.warning(
                 "branch_b_failed",
                 document_id=str(document_id),
-                error=str(exc),
+                error=graph_report.error,
             )
 
-        # ── Branch C: Embedding + Community Detection ──
-        embedding_success = False
+        # ── Branch C: Community Detection ──
+        community_detection_success = False
         try:
             if graph_success:
-                async with async_session_maker() as db:
-                    async with db.begin():
-                        async with db.begin_nested():
-                            await embed_new_nodes(db, project_id)
-                        embedding_success = True
-
                 # Fire community detection as an independent background task.
                 # It owns its own session via fire_community_detection().
-                asyncio.create_task(
-                    fire_community_detection(project_id)
-                )
+                asyncio.create_task(fire_community_detection(project_id))
+                community_detection_success = True
 
                 logger.info(
                     "branch_c_complete",
@@ -252,7 +261,7 @@ async def process_document_task(document_id: UUID) -> None:
             )
 
         # ── Final status update ──
-        if not graph_success or not embedding_success:
+        if not graph_success or not community_detection_success:
             async with async_session_maker() as db:
                 async with db.begin():
                     await db.execute(
@@ -264,7 +273,7 @@ async def process_document_task(document_id: UUID) -> None:
                 "document_ready_partial",
                 document_id=str(document_id),
                 graph_success=graph_success,
-                embedding_success=embedding_success,
+                community_detection_success=community_detection_success,
             )
         else:
             logger.info(
@@ -290,8 +299,11 @@ async def process_document_task(document_id: UUID) -> None:
             error=str(exc),
         )
     finally:
-        if tmp_path and os.path.exists(tmp_path):
-            os.unlink(tmp_path)
+        # Clean up temp files — both the one created here and from the router.
+        if tmp_path_owned and os.path.exists(tmp_path_owned):
+            os.unlink(tmp_path_owned)
+        if tmp_path_from_router and os.path.exists(tmp_path_from_router):
+            os.unlink(tmp_path_from_router)
 
 
 async def answer_question_with_cache(
@@ -302,6 +314,7 @@ async def answer_question_with_cache(
 
     If a single cached document is available, use from_cached_content.
     Otherwise, inline the raw content of all ready documents in the prompt.
+    Binary documents without raw_content are accessed via gemini_file_uri.
     """
     system_instruction = (
         "You are an expert Context Orchestrator for an Agentic IDE. "
@@ -311,10 +324,7 @@ async def answer_question_with_cache(
     )
 
     # Hybrid routing logic
-    if (
-        len(ready_docs) == 1
-        and ready_docs[0].gemini_cache_name is not None
-    ):
+    if len(ready_docs) == 1 and ready_docs[0].gemini_cache_name is not None:
         model = genai.GenerativeModel.from_cached_content(  # type: ignore[attr-defined]
             cached_content=ready_docs[0].gemini_cache_name,
         )
@@ -329,6 +339,8 @@ async def answer_question_with_cache(
             model_name="gemini-1.5-pro-002",
             system_instruction=system_instruction,
         )
+        # Only include documents with raw_content (text) in inline context.
+        # Binary docs are accessed via File API/cache, not inline.
         context_blocks = [
             f"--- DOCUMENT: {doc.title} ---\n{doc.raw_content}\n"
             for doc in ready_docs
@@ -340,6 +352,7 @@ async def answer_question_with_cache(
             "qa_routing",
             strategy="inline_context",
             documents=len(ready_docs),
+            text_docs=len(context_blocks),
         )
 
     response = await asyncio.to_thread(

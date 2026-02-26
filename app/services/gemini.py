@@ -1,3 +1,4 @@
+import asyncio
 from typing import Any
 from uuid import UUID
 
@@ -67,14 +68,14 @@ async def _call_gemini(
 ) -> Any:
     """Execute the Gemini API call with automatic retries."""
     model = genai.GenerativeModel(  # type: ignore[attr-defined]
-        model_name=settings.gemini_model,
+        model_name=settings.gemini_synthesis_model,
         generation_config=genai.GenerationConfig(  # type: ignore[attr-defined]
             temperature=settings.gemini_temperature,
             response_mime_type="application/json",
             response_schema=BusinessRuleSchema,
         ),
     )
-    return await model.generate_content_async(full_prompt)
+    return await asyncio.to_thread(model.generate_content, full_prompt)
 
 
 async def extract_sanitized_business(

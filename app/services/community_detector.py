@@ -90,14 +90,10 @@ async def check_community_readiness(
     to avoid 2 separate SELECTs (performance constraint).
     """
     node_count_q = (
-        select(func.count())
-        .where(GraphNode.project_id == project_id)
-        .scalar_subquery()
+        select(func.count()).where(GraphNode.project_id == project_id).scalar_subquery()
     )
     edge_count_q = (
-        select(func.count())
-        .where(GraphEdge.project_id == project_id)
-        .scalar_subquery()
+        select(func.count()).where(GraphEdge.project_id == project_id).scalar_subquery()
     )
 
     result = await session.execute(
@@ -147,9 +143,7 @@ async def run_community_detection(
     edges = [(str(r[0]), str(r[1]), float(r[2])) for r in edge_result.all()]
 
     # Run Leiden in a thread (CPU-bound).
-    node_communities = await asyncio.to_thread(
-        _run_leiden_sync, node_ids, edges
-    )
+    node_communities = await asyncio.to_thread(_run_leiden_sync, node_ids, edges)
 
     # Write community assignments back.
     for node_id_str, community_id in node_communities.items():
@@ -191,14 +185,18 @@ async def generate_community_summaries(
     Returns a dict of community_id → summary string.
     Does NOT call session.commit() (C_03).
     """
-    stmt = select(
-        GraphNode.community_id,
-        func.array_agg(GraphNode.name),
-        func.array_agg(GraphNode.description),
-    ).where(
-        GraphNode.project_id == project_id,
-        GraphNode.community_id.is_not(None),
-    ).group_by(GraphNode.community_id)
+    stmt = (
+        select(
+            GraphNode.community_id,
+            func.array_agg(GraphNode.name),
+            func.array_agg(GraphNode.description),
+        )
+        .where(
+            GraphNode.project_id == project_id,
+            GraphNode.community_id.is_not(None),
+        )
+        .group_by(GraphNode.community_id)
+    )
 
     result = await session.execute(stmt)
     rows = result.all()
@@ -210,14 +208,11 @@ async def generate_community_summaries(
             continue
 
         entities_text = "\n".join(
-            f"- {name}: {desc}"
-            for name, desc in zip(names, descriptions)
+            f"- {name}: {desc}" for name, desc in zip(names, descriptions)
         )
 
         try:
-            summary = await asyncio.to_thread(
-                _generate_summary_sync, entities_text
-            )
+            summary = await asyncio.to_thread(_generate_summary_sync, entities_text)
             summaries[int(community_id)] = summary
         except Exception:  # noqa: BLE001
             logger.warning(

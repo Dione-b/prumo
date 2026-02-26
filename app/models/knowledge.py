@@ -55,4 +55,3 @@ class KnowledgeDocument(Base):
             name="ck_knowledge_status_valid",
         ),
     )
-

@@ -1,9 +1,17 @@
 # TECH_DEBT_003: WARNING - No CSRF protection. Bind to 127.0.0.1 only.
 # Do not expose to public network without adding CSRF middleware.
 
+from __future__ import annotations
+
+import asyncio
+import shutil
+import tempfile
 from datetime import UTC, datetime
+from pathlib import Path
+from typing import BinaryIO
 from uuid import UUID
 
+import structlog
 from fastapi import (
     APIRouter,
     BackgroundTasks,
@@ -20,33 +28,88 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.knowledge import KnowledgeDocument
+from app.models.project import Project
 from app.schemas.knowledge import (
     CacheRefreshingResponse,
     DocumentIngestRequest,
     QueryMode,
 )
+from app.services.file_classifier import (
+    MAX_TEXT_MATERIALIZATION_BYTES,
+    get_upload_mime,
+    is_binary_file,
+)
 from app.services.knowledge_orchestrator import (
-    orchestrate_ingestion,
+    orchestrate_batch_ingestion,
     orchestrate_query,
 )
+
+logger = structlog.get_logger()
 
 router = APIRouter(prefix="/ui", tags=["UI Testbed"])
 templates = Jinja2Templates(directory="templates")
 
 
 @router.get("/", response_class=HTMLResponse)
-async def dashboard(request: Request) -> HTMLResponse:
-    """Render the HTMX test dashboard."""
-    return templates.TemplateResponse("index.html", {"request": request})
+async def dashboard(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> HTMLResponse:
+    """Render the HTMX test dashboard.
+
+    Read-only: fetches all projects for the dropdown.
+    No inserts, no commits — compliant with C_03_UoW.
+    """
+    result = await db.execute(select(Project).order_by(Project.created_at))
+    projects = result.scalars().all()
+    return templates.TemplateResponse(
+        "index.html",
+        {"request": request, "projects": projects},
+    )
 
 
-def _read_upload_content(upload: UploadFile) -> str:
-    """Read text file content with UTF-8 fallback to latin-1."""
-    raw = upload.file.read()
+def _stream_to_tempfile(upload_stream: BinaryIO, suffix: str) -> str:
+    """Stream binary upload directly to a temp file without loading into RAM.
+
+    Uses shutil.copyfileobj with a 64KB buffer to keep memory usage constant
+    regardless of file size.
+
+    Args:
+        upload_stream: The file-like object from UploadFile (upload.file).
+        suffix: File extension (e.g. ".pdf").
+
+    Returns:
+        Absolute path of the created temp file.
+    """
+    fd, tmp_path = tempfile.mkstemp(suffix=suffix)
     try:
-        return raw.decode("utf-8")
+        with open(fd, "wb") as dest:
+            shutil.copyfileobj(upload_stream, dest, length=65_536)
+    except Exception:
+        Path(tmp_path).unlink(missing_ok=True)
+        raise
+    return tmp_path
+
+
+def _read_text_safe(raw_bytes: bytes) -> str:
+    """Read bytes as UTF-8 text with fallback and null byte sanitization.
+
+    Strips '\x00' (null bytes) that cause CharacterNotInRepertoireError
+    in PostgreSQL when persisted to TEXT/VARCHAR columns.
+
+    Args:
+        raw_bytes: Raw file bytes.
+
+    Returns:
+        Sanitized text content.
+    """
+    try:
+        text = raw_bytes.decode("utf-8")
     except UnicodeDecodeError:
-        return raw.decode("latin-1")
+        text = raw_bytes.decode("latin-1")
+
+    # Guard against null bytes that slip through mixed encodings.
+    return text.replace("\x00", "")
 
 
 @router.post("/ingest", response_class=HTMLResponse)
@@ -59,62 +122,87 @@ async def ui_ingest(
     source_type: str = Form(...),
     files: list[UploadFile] | None = File(None),
     db: AsyncSession = Depends(get_db),
-    ) -> HTMLResponse:
-    """Handle document ingestion: paste (title+content) or file upload (single/multiple)."""
+) -> HTMLResponse:
+    """Handle document ingestion via paste or file upload.
+
+    Supports single and multi-file uploads. For binary files (PDF/DOCX),
+    the upload is streamed directly to disk without loading into RAM.
+    raw_content stays NULL in the database — the background task reads
+    from the temp file via streaming.
+    """
     docs: list[KnowledgeDocument] = []
 
     if files:
+        ingest_requests: list[DocumentIngestRequest] = []
         for upload in files:
             if not upload or not upload.filename:
                 continue
 
             filename = upload.filename
             content_type = (upload.content_type or "").lower()
-            is_pdf = filename.lower().endswith(".pdf") or content_type == "application/pdf"
+            binary = is_binary_file(content_type, filename)
 
-            # Read file bytes asynchronously to avoid blocking the event loop.
-            raw_bytes = await upload.read()
+            final_title = (title or "").strip() or filename
 
-            metadata: dict[str, object] | None = None
+            if binary:
+                # STREAMING PATH: Never call read(). Stream directly to disk.
+                suffix = Path(filename).suffix.lower() or ".bin"
+                tmp_path = await _stream_binary_to_disk(upload, suffix)
 
-            if is_pdf:
-                # Preserve binary PDF bytes via latin-1 round-trip and mark metadata
-                # so the background task can reconstruct and upload as application/pdf.
-                binary_text = raw_bytes.decode("latin-1")
-                final_title = (title or "").strip() or filename
-                final_content = binary_text
-                metadata = {
-                    "is_binary_upload": True,
-                    "source_filename": filename,
-                    "content_type": content_type or "application/pdf",
-                    "encoding": "latin-1",
-                    "file_suffix": ".pdf",
-                }
+                upload_mime = get_upload_mime(content_type, filename)
+
+                ingest_req = DocumentIngestRequest(
+                    project_id=project_id,
+                    title=final_title,
+                    content=None,  # raw_content = NULL in the database
+                    source_type=source_type,
+                    metadata={
+                        "is_binary_upload": True,
+                        "source_filename": filename,
+                        "content_type": upload_mime,
+                        "temp_file_path": tmp_path,
+                        "file_suffix": suffix,
+                    },
+                )
             else:
-                # Treat as text file; keep existing behavior with charset fallback.
-                try:
-                    text_content = raw_bytes.decode("utf-8")
-                except UnicodeDecodeError:
-                    text_content = raw_bytes.decode("latin-1")
-                final_title = (title or "").strip() or filename
-                final_content = text_content
+                # TEXT PATH: Materialize with a 10MB limit and sanitize null bytes.
+                raw_bytes = await upload.read()
 
-            ingest_req = DocumentIngestRequest(
-                project_id=project_id,
-                title=final_title,
-                content=final_content,
-                source_type=source_type,
-                metadata=metadata,
-            )
-            doc, _ = await orchestrate_ingestion(ingest_req, background_tasks, db)
-            docs.append(doc)
+                if len(raw_bytes) > MAX_TEXT_MATERIALIZATION_BYTES:
+                    logger.warning(
+                        "text_file_exceeds_limit",
+                        filename=filename,
+                        size_bytes=len(raw_bytes),
+                        limit=MAX_TEXT_MATERIALIZATION_BYTES,
+                    )
+                    error_html = (
+                        "<div class='rounded-lg bg-red-50 px-3 py-2 text-sm "
+                        f"font-medium text-red-800'>File '{filename}' exceeds "
+                        f"{MAX_TEXT_MATERIALIZATION_BYTES // (1024 * 1024)}MB "
+                        "limit for text files.</div>"
+                    )
+                    return HTMLResponse(content=error_html)
 
-        if not docs:
+                final_content = _read_text_safe(raw_bytes)
+
+                ingest_req = DocumentIngestRequest(
+                    project_id=project_id,
+                    title=final_title,
+                    content=final_content,
+                    source_type=source_type,
+                    metadata=None,
+                )
+
+            ingest_requests.append(ingest_req)
+
+        if not ingest_requests:
             error_html = (
                 "<div class='rounded-lg bg-red-50 px-3 py-2 text-sm "
                 "font-medium text-red-800'>Nenhum arquivo válido foi selecionado.</div>"
             )
             return HTMLResponse(content=error_html)
+
+        docs = await orchestrate_batch_ingestion(ingest_requests, background_tasks, db)
 
         template_str = (
             "{% from 'snippets.html' import status_polling %}"
@@ -132,7 +220,8 @@ async def ui_ingest(
         return HTMLResponse(content=error_html)
 
     final_title = title.strip() if title else ""
-    final_content = content or ""
+    # Sanitize null bytes even in textarea input.
+    final_content = (content or "").replace("\x00", "")
 
     ingest_req = DocumentIngestRequest(
         project_id=project_id,
@@ -141,7 +230,8 @@ async def ui_ingest(
         source_type=source_type,
         metadata=None,
     )
-    doc, _ = await orchestrate_ingestion(ingest_req, background_tasks, db)
+    docs = await orchestrate_batch_ingestion([ingest_req], background_tasks, db)
+    doc = docs[0]
 
     template_str = (
         "{% from 'snippets.html' import status_polling %}"
@@ -149,6 +239,19 @@ async def ui_ingest(
     )
     html = templates.env.from_string(template_str).render(doc_id=doc.id)
     return HTMLResponse(content=html)
+
+
+async def _stream_binary_to_disk(upload: UploadFile, suffix: str) -> str:
+    """Stream binary to disk via asyncio.to_thread to avoid blocking the event loop.
+
+    Args:
+        upload: FastAPI UploadFile object.
+        suffix: File extension (e.g. ".pdf").
+
+    Returns:
+        Absolute path of the temp file.
+    """
+    return await asyncio.to_thread(_stream_to_tempfile, upload.file, suffix)
 
 
 @router.get("/status/{document_id}", response_class=HTMLResponse)
@@ -235,8 +338,7 @@ async def ui_query(
             return HTMLResponse(content=html)
 
         template_str = (
-            "{% from 'snippets.html' import qa_answer %}"
-            "{{ qa_answer(answer) }}"
+            "{% from 'snippets.html' import qa_answer %}{{ qa_answer(answer) }}"
         )
         html = templates.env.from_string(template_str).render(answer=result)
         return HTMLResponse(content=html)
@@ -244,4 +346,3 @@ async def ui_query(
         return HTMLResponse(
             f"<div class='text-red-500'>Error querying Gemini: {exc}</div>",
         )
-

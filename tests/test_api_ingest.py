@@ -1,6 +1,6 @@
 import uuid
 from collections.abc import AsyncGenerator
-from unittest.mock import AsyncMock
+from unittest.mock import ANY, AsyncMock
 
 import httpx
 import pytest
@@ -41,7 +41,7 @@ async def mock_gemini_extraction(
         confidence_level="HIGH",
     )
     patched = mocker.patch(
-        "app.routers.ingest.extract_sanitized_business",
+        "app.routers.ingest.LLMGateway.extract_business_rules",
         return_value=extracted_data,
         autospec=True,
     )
@@ -135,6 +135,7 @@ async def test_ingest_business_success(
     mock_db.add.assert_called_once()
     mock_db.commit.assert_awaited_once()
     mock_gemini_extraction.assert_awaited_once_with(
+        ANY,
         valid_payload["raw_text"],
-        project_id=uuid.UUID(valid_payload["project_id"]),
+        ANY,
     )

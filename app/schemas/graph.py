@@ -64,13 +64,11 @@ class EntityExtractionResult(BaseModel):
         for rel in self.relations:
             if rel.source not in entity_names:
                 dangling.append(
-                    f"source '{rel.source}' in "
-                    f"relation '{rel.relation_type}'"
+                    f"source '{rel.source}' in relation '{rel.relation_type}'"
                 )
             if rel.target not in entity_names:
                 dangling.append(
-                    f"target '{rel.target}' in "
-                    f"relation '{rel.relation_type}'"
+                    f"target '{rel.target}' in relation '{rel.relation_type}'"
                 )
 
         if dangling:

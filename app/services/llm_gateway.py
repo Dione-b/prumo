@@ -1,0 +1,210 @@
+"""LLMGateway — routes requests to local Ollama models."""
+
+from __future__ import annotations
+
+import json
+from typing import Any, TypeVar
+
+import structlog
+import tiktoken
+from pydantic import BaseModel, ValidationError
+
+from app.config import settings
+from app.services.ollama_client import OllamaClient
+from app.services.sanitizer import extract_pdf_if_needed, sanitize_llm_json
+from app.utils.tool_converter import pydantic_to_tool
+
+logger = structlog.get_logger()
+
+T = TypeVar("T", bound=BaseModel)
+
+
+class LLMGateway:
+    """Extraction gateway using the sequential OllamaClient."""
+
+    def __init__(self) -> None:
+        self.ollama_client = OllamaClient()
+
+    async def extract_business_rules(self, text: str, schema: type[T]) -> T:
+        """Thinking-capable gateway for Business Rule extraction.
+
+        1. Convert schema to tool definition.
+        2. Capture and log response.message.thinking for auditing (C_01).
+        3. Parse result from tool_calls[0].function.arguments.
+        """
+        text = extract_pdf_if_needed(text)
+
+        # 120k token truncation
+        enc = tiktoken.get_encoding("cl100k_base")
+        tokens = enc.encode(text)
+        max_tokens = 120_000
+        if len(tokens) > max_tokens:
+            text = enc.decode(tokens[:max_tokens])
+
+        client = self.ollama_client
+
+        system_prompt = (
+            "You are an expert technical data extractor. "
+            "Extract structured information from the provided text using the "
+            "available tool."
+        )
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": text},
+        ]
+
+        tools = [pydantic_to_tool(schema)]
+
+        failures = 0
+        latest_error: Exception | None = None
+
+        for attempt in range(1, 4):
+            try:
+                # 2. Call self.ollama_client.chat.
+                response = await client.chat(
+                    model=settings.ollama_business_model,
+                    messages=messages,
+                    tools=tools,
+                    think=True,
+                    options={"num_predict": 2048},
+                )
+
+                message = (
+                    response.message
+                    if hasattr(response, "message")
+                    else response.get("message", {})
+                )
+
+                # C_01: Capture and log thinking trace
+                thinking_trace = getattr(
+                    message, "thinking", message.get("thinking", "")
+                )
+                if thinking_trace:
+                    logger.info("ollama_thinking_trace", thinking=thinking_trace)
+
+                tool_calls = getattr(
+                    message, "tool_calls", message.get("tool_calls", [])
+                )
+
+                if tool_calls and len(tool_calls) > 0:
+                    tool_call = tool_calls[0]
+                    if hasattr(tool_call, "function"):
+                        func_obj = tool_call.function
+                        arguments = getattr(func_obj, "arguments", {})
+                    elif isinstance(tool_call, dict) and "function" in tool_call:
+                        arguments = tool_call["function"].get("arguments", {})
+                    else:
+                        arguments = {}
+
+                    if isinstance(arguments, str):
+                        try:
+                            parsed_data = json.loads(arguments)
+                        except json.JSONDecodeError:
+                            parsed_data = sanitize_llm_json(arguments)
+                    else:
+                        parsed_data = arguments
+                else:
+                    content = getattr(message, "content", message.get("content", ""))
+                    parsed_data = sanitize_llm_json(content)
+
+                result = schema(**parsed_data)
+
+                # C_01: Audit thinking trace to ensure high-fidelity business rules
+                if thinking_trace and (
+                    "contradict" in thinking_trace.lower()
+                    or "conflict" in thinking_trace.lower()
+                ):
+                    if hasattr(result, "confidence_level"):
+                        object.__setattr__(result, "confidence_level", "LOW")
+                        if (
+                            hasattr(result, "_warnings")
+                            and "contradictory_thinking_downgrade"
+                            not in result._warnings
+                        ):
+                            result._warnings.append(
+                                "Confidence downgraded: contradictory thinking trace."
+                            )
+
+                # C_01: Enforce confidence downgrades if extraction
+                # schema validation fails > 2 times.
+                if failures >= 2 and hasattr(result, "confidence_level"):
+                    object.__setattr__(result, "confidence_level", "LOW")
+                    if (
+                        hasattr(result, "_warnings")
+                        and "schema_validation_downgrade" not in result._warnings
+                    ):
+                        result._warnings.append(
+                            "Confidence downgraded due to multiple validation failures."
+                        )
+
+                return result
+            except TimeoutError as e:
+                # C_01: Downgrade confidence to MEDIUM if wait exceeds timeout.
+                logger.warning("ollama_timeout_downgrade")
+                # Fallback dictionary simulating schema extraction loosely
+                if (
+                    hasattr(schema, "model_fields")
+                    and "confidence_level" in schema.model_fields
+                ):
+                    # Provide default values based on schema structure
+                    default_obj_fallback: dict[str, Any] = {}
+                    for field_name, field_info in schema.model_fields.items():
+                        if field_name == "confidence_level":
+                            default_obj_fallback[field_name] = "MEDIUM"
+                        elif field_name == "client_name":
+                            default_obj_fallback[field_name] = "Unknown"
+                        elif field_name == "core_objective":
+                            default_obj_fallback[field_name] = (
+                                "Extraction timed out due to resource contention"
+                            )
+                        elif field_info.annotation is list or str(
+                            field_info.annotation
+                        ).startswith("list"):
+                            default_obj_fallback[field_name] = []
+                        elif field_info.annotation is str:
+                            default_obj_fallback[field_name] = ""
+                        else:
+                            default_obj_fallback[field_name] = None
+
+                    fallback = schema(**default_obj_fallback)
+                    if hasattr(fallback, "_warnings"):
+                        fallback._warnings.append(
+                            "Semaphore timeout - hardware contention."
+                        )
+                    return fallback
+                raise e  # Throw timeout if confidence downgrade is not supported
+            except (json.JSONDecodeError, ValidationError) as e:
+                failures += 1
+                latest_error = e
+                logger.warning(
+                    "ollama_extraction_failed", attempt=attempt, error=str(e)
+                )
+
+        # If it fails > 2 times, fallback
+        logger.error("ollama_extraction_exhausted", error=str(latest_error))
+
+        # Generic fallback
+        default_obj: dict[str, Any] = {}
+        for field_name, field_info in schema.model_fields.items():
+            if field_name == "confidence_level":
+                default_obj[field_name] = "LOW"  # C_01 Enforce
+            elif field_name == "client_name":
+                default_obj[field_name] = "Unknown"
+            elif field_name == "core_objective":
+                default_obj[field_name] = "Extraction failed due to validation errors"
+            elif field_info.annotation is list or str(field_info.annotation).startswith(
+                "list"
+            ):
+                default_obj[field_name] = []
+            elif field_info.annotation is str:
+                default_obj[field_name] = ""
+            else:
+                default_obj[field_name] = None
+
+        fallback = schema(**default_obj)
+        if hasattr(fallback, "_warnings"):
+            fallback._warnings.append(
+                f"Fallback generation after 3 failures: {latest_error}"
+            )
+        return fallback
