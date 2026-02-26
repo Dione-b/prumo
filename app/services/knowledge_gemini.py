@@ -21,14 +21,12 @@ import asyncio
 import os
 import tempfile
 import time
-from datetime import timedelta
 from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-import google.generativeai as genai  # type: ignore[import-untyped]
 import structlog
-from google.api_core.exceptions import InvalidArgument
+from google import genai
 from sqlalchemy import select, update
 
 from app.config import settings
@@ -39,7 +37,7 @@ from app.services.community_detector import fire_community_detection
 from app.services.graph_extractor import safe_extract_and_upsert
 
 logger = structlog.get_logger()
-genai.configure(api_key=settings.gemini_api_key.get_secret_value())  # type: ignore[attr-defined]
+client = genai.Client(api_key=settings.gemini_api_key.get_secret_value())
 
 MAX_POLL_SECONDS = 300
 POLL_INTERVAL = 2
@@ -55,43 +53,30 @@ def _upload_and_wait_for_active(
 
     This function is synchronous by design and intended to run in a thread.
     """
-    uploaded_file: Any = genai.upload_file(  # type: ignore[attr-defined]
-        tmp_path,
-        mime_type=mime_type,
-        display_name=display_name,
+    uploaded_file = client.files.upload(
+        file=tmp_path,
+        config=genai.types.UploadFileConfig(
+            mime_type=mime_type,
+            display_name=display_name,
+        ),
     )
     elapsed = 0
 
-    while uploaded_file.state.name == "PROCESSING":
+    while (
+        getattr(uploaded_file.state, "name", str(uploaded_file.state)) == "PROCESSING"
+    ):
         if elapsed >= max_wait:
             msg = f"File {uploaded_file.name} stuck in PROCESSING after {max_wait}s."
             raise TimeoutError(msg)
         time.sleep(POLL_INTERVAL)
         elapsed += POLL_INTERVAL
-        uploaded_file = genai.get_file(uploaded_file.name)  # type: ignore[attr-defined]
+        uploaded_file = client.files.get(name=str(uploaded_file.name))
 
-    if uploaded_file.state.name != "ACTIVE":
-        msg = f"File upload failed. Final state: {uploaded_file.state.name}"
+    if getattr(uploaded_file.state, "name", str(uploaded_file.state)) != "ACTIVE":
+        msg = f"File upload failed. Final state: {uploaded_file.state}"
         raise ValueError(msg)
 
     return uploaded_file
-
-
-def _create_cache_sync(file_info: Any) -> Any:
-    """Create a Gemini cache for the uploaded file.
-
-    This function is synchronous by design and intended to run in a thread.
-    """
-    return genai.caching.CachedContent.create(
-        model="models/gemini-1.5-pro-002",
-        system_instruction=(
-            "You are a strict technical context orchestrator. "
-            "Answer questions based strictly on the provided document. "
-            "If the answer is not in the document, you must say 'I don't know'."
-        ),
-        contents=[file_info],
-        ttl=timedelta(minutes=60),
-    )
 
 
 async def process_document_task(document_id: UUID) -> None:
@@ -118,22 +103,17 @@ async def process_document_task(document_id: UUID) -> None:
         async with async_session_maker() as db:
             async with db.begin():
                 result = await db.execute(
-                    select(
-                        KnowledgeDocument.raw_content,
-                        KnowledgeDocument.title,
-                        KnowledgeDocument.project_id,
-                        KnowledgeDocument.metadata_json,
-                    ).where(KnowledgeDocument.id == document_id)
+                    select(KnowledgeDocument).where(KnowledgeDocument.id == document_id)
                 )
-                row = result.first()
+                doc = result.scalar_one_or_none()
 
-        if row is None:
+        if doc is None:
             return
 
-        raw_content: str | None = row[0]
-        title: str = row[1]
-        project_id: UUID = row[2]
-        metadata: dict[str, Any] = row[3] or {}
+        raw_content = doc.raw_content
+        title = doc.title
+        project_id = doc.project_id
+        metadata = doc.metadata_json or {}
 
         is_binary_upload = bool(metadata.get("is_binary_upload"))
         content_type = str(metadata.get("content_type") or "text/plain")
@@ -177,29 +157,24 @@ async def process_document_task(document_id: UUID) -> None:
             upload_mime,
         )
 
+        from app.services.knowledge_orchestrator import KnowledgeOrchestrator
+
+        orchestrator = KnowledgeOrchestrator()
         try:
-            cache = await asyncio.to_thread(_create_cache_sync, file_info)
-            update_values: dict[str, Any] = {
-                "gemini_file_uri": getattr(file_info, "uri", None),
-                "gemini_cache_name": getattr(cache, "name", None),
-                "cache_expires_at": getattr(cache, "expire_time", None),
-                "status": "READY",
+            update_values = await orchestrator.process_document_caching(
+                doc=doc,
+                file_info=file_info,
+            )
+        except Exception as exc:
+            logger.error("orchestrator_caching_failed", error=str(exc))
+            update_values = {
+                "gemini_file_uri": (
+                    getattr(file_info, "uri", getattr(file_info, "name", None))
+                    if file_info
+                    else None
+                ),
+                "status": "READY_PARTIAL",
             }
-        except InvalidArgument as exc:
-            message = str(exc).lower()
-            if "minimum" in message or "32768" in message:
-                update_values = {
-                    "gemini_file_uri": getattr(file_info, "uri", None),
-                    "gemini_cache_name": None,
-                    "status": "READY",
-                }
-                logger.info(
-                    "document_ready_uncached",
-                    document_id=str(document_id),
-                    reason="below_token_limit_or_cache_constraints",
-                )
-            else:
-                raise
 
         # Persist Branch A results.
         async with async_session_maker() as db:
@@ -323,46 +298,55 @@ async def answer_question_with_cache(
         "If the answer cannot be found in the text, you MUST state 'I don't know'."
     )
 
-    # Hybrid routing logic
     if len(ready_docs) == 1 and ready_docs[0].gemini_cache_name is not None:
-        model = genai.GenerativeModel.from_cached_content(  # type: ignore[attr-defined]
-            cached_content=ready_docs[0].gemini_cache_name,
-        )
-        prompt = question
+        from app.services.gemini_client import GeminiClient
+
+        gemini_client = GeminiClient()
         logger.info(
             "qa_routing",
             strategy="cached_content",
             document_id=str(ready_docs[0].id),
         )
-    else:
-        model = genai.GenerativeModel(  # type: ignore[attr-defined]
-            model_name="gemini-1.5-pro-002",
-            system_instruction=system_instruction,
-        )
-        # Only include documents with raw_content (text) in inline context.
-        # Binary docs are accessed via File API/cache, not inline.
-        context_blocks = [
-            f"--- DOCUMENT: {doc.title} ---\n{doc.raw_content}\n"
-            for doc in ready_docs
-            if doc.raw_content
-        ]
-        combined_context = "\n".join(context_blocks)
-        prompt = f"CONTEXT:\n{combined_context}\n\nQUESTION:\n{question}"
-        logger.info(
-            "qa_routing",
-            strategy="inline_context",
-            documents=len(ready_docs),
-            text_docs=len(context_blocks),
+        return await gemini_client.generate_with_cache(
+            cache_name=ready_docs[0].gemini_cache_name,
+            prompt=question,
+            schema=KnowledgeAnswer,
+            model=settings.gemini_synthesis_model,
         )
 
-    response = await asyncio.to_thread(
-        model.generate_content,
-        prompt,
-        generation_config=genai.GenerationConfig(  # type: ignore[attr-defined]
-            response_mime_type="application/json",
-            response_schema=KnowledgeAnswer,
-            temperature=0.0,
-        ),
+    # Inline fallback
+    context_blocks = [
+        f"--- DOCUMENT: {doc.title} ---\n{doc.raw_content}\n"
+        for doc in ready_docs
+        if doc.raw_content
+    ]
+    combined_context = "\n".join(context_blocks)
+    prompt = f"CONTEXT:\n{combined_context}\n\nQUESTION:\n{question}"
+    logger.info(
+        "qa_routing",
+        strategy="inline_context",
+        documents=len(ready_docs),
+        text_docs=len(context_blocks),
     )
 
-    return KnowledgeAnswer.model_validate_json(response.text)
+    def sync_generate() -> KnowledgeAnswer:
+        response = client.models.generate_content(
+            model=settings.gemini_synthesis_model,
+            contents=prompt,
+            config=genai.types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=KnowledgeAnswer,
+                temperature=0.0,
+                system_instruction=system_instruction,
+            ),
+        )
+        # Ensure we pass str to model_validate_json
+        return KnowledgeAnswer.model_validate_json(str(response.text))
+
+    answer = await asyncio.to_thread(sync_generate)
+
+    # C_01: Enforce confidence downgrades if cache-routing fails
+    if answer.confidence_level == "HIGH":
+        object.__setattr__(answer, "confidence_level", "MEDIUM")
+
+    return answer

@@ -14,8 +14,8 @@ from __future__ import annotations
 import asyncio
 from uuid import UUID
 
-import google.generativeai as genai  # type: ignore[import-untyped]
 import structlog
+from google import genai
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,7 +26,7 @@ from app.schemas.knowledge import AnswerCitation, KnowledgeAnswer
 
 logger = structlog.get_logger()
 
-genai.configure(api_key=settings.gemini_api_key.get_secret_value())  # type: ignore[attr-defined]
+client = genai.Client(api_key=settings.gemini_api_key.get_secret_value())
 
 _EMBEDDING_MODEL = "models/text-embedding-004"
 _TASK_TYPE_QUERY = "RETRIEVAL_QUERY"
@@ -51,33 +51,35 @@ _SYNTHESIS_SYSTEM_INSTRUCTION = (
 
 def _embed_query_sync(query: str) -> list[float]:
     """Embed a query string synchronously — runs in thread."""
-    result = genai.embed_content(  # type: ignore[attr-defined]
+    result = client.models.embed_content(
         model=_EMBEDDING_MODEL,
-        content=query,
-        task_type=_TASK_TYPE_QUERY,
-        output_dimensionality=EMBEDDING_DIMENSIONS,
+        contents=query,
+        config=genai.types.EmbedContentConfig(
+            task_type=_TASK_TYPE_QUERY,
+            output_dimensionality=EMBEDDING_DIMENSIONS,
+        ),
     )
-    return result["embedding"]  # type: ignore[no-any-return]
+    embeddings = getattr(result, "embeddings", None)
+    if not embeddings or not embeddings[0].values:
+        return []
+    return [float(v) for v in embeddings[0].values]
 
 
 def _synthesize_sync(context: str, question: str) -> KnowledgeAnswer:
     """Run synthesis via Gemini Pro synchronously — runs in thread."""
-    model = genai.GenerativeModel(  # type: ignore[attr-defined]
-        model_name="gemini-1.5-pro-002",
-        system_instruction=_SYNTHESIS_SYSTEM_INSTRUCTION,
-    )
-
     prompt = f"GRAPH CONTEXT:\n{context}\n\nQUESTION:\n{question}"
 
-    response = model.generate_content(
-        prompt,
-        generation_config=genai.GenerationConfig(  # type: ignore[attr-defined]
+    response = client.models.generate_content(
+        model=settings.gemini_synthesis_model,
+        contents=prompt,
+        config=genai.types.GenerateContentConfig(
             response_mime_type="application/json",
             response_schema=KnowledgeAnswer,
             temperature=0.0,
+            system_instruction=_SYNTHESIS_SYSTEM_INSTRUCTION,
         ),
     )
-    return KnowledgeAnswer.model_validate_json(response.text)
+    return KnowledgeAnswer.model_validate_json(str(response.text))
 
 
 async def _get_query_embedding(question: str) -> list[float]:

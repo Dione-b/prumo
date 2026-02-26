@@ -41,14 +41,17 @@ class OllamaClient:
                 kwargs: dict[str, Any] = {
                     "model": model,
                     "messages": messages,
-                    "keep_alive": 0,
                 }
+
+                final_options: dict[str, Any] = {"keep_alive": 0}
                 if options is not None:
-                    kwargs["options"] = options
+                    final_options.update(options)
+                kwargs["options"] = final_options
+
                 if tools is not None:
                     kwargs["tools"] = tools
-                if think is not None:
-                    kwargs["think"] = think
+                if think:
+                    kwargs["think"] = True
 
                 res = await self._client.chat(**kwargs)
                 return res
@@ -66,7 +69,7 @@ class OllamaClient:
                 kwargs: dict[str, Any] = {
                     "model": model,
                     "prompt": prompt,
-                    "keep_alive": 0,
+                    "options": {"keep_alive": 0},
                 }
                 if format:
                     kwargs["format"] = format
@@ -86,7 +89,7 @@ class OllamaClient:
                 res = await self._client.embed(
                     model=model,
                     input=input_texts,
-                    keep_alive=0,
+                    options={"keep_alive": 0},
                 )
                 return res
             finally:

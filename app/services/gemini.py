@@ -2,7 +2,7 @@ import asyncio
 from typing import Any
 from uuid import UUID
 
-import google.generativeai as genai
+from google import genai
 from tenacity import (
     RetryCallState,
     retry,
@@ -17,7 +17,7 @@ from app.services.sanitizer import sanitize_llm_json
 
 log = get_logger(__name__)
 
-genai.configure(api_key=settings.gemini_api_key.get_secret_value())  # type: ignore[attr-defined]
+client = genai.Client(api_key=settings.gemini_api_key.get_secret_value())
 
 SYSTEM_PROMPT_EXTRACTION = (
     "You are an expert technical business analyst. "
@@ -67,15 +67,19 @@ async def _call_gemini(
     full_prompt: str,
 ) -> Any:
     """Execute the Gemini API call with automatic retries."""
-    model = genai.GenerativeModel(  # type: ignore[attr-defined]
-        model_name=settings.gemini_synthesis_model,
-        generation_config=genai.GenerationConfig(  # type: ignore[attr-defined]
-            temperature=settings.gemini_temperature,
-            response_mime_type="application/json",
-            response_schema=BusinessRuleSchema,
-        ),
-    )
-    return await asyncio.to_thread(model.generate_content, full_prompt)
+
+    def sync_call() -> Any:
+        return client.models.generate_content(
+            model=settings.gemini_synthesis_model,
+            contents=full_prompt,
+            config=genai.types.GenerateContentConfig(
+                temperature=settings.gemini_temperature,
+                response_mime_type="application/json",
+                response_schema=BusinessRuleSchema,
+            ),
+        )
+
+    return await asyncio.to_thread(sync_call)
 
 
 async def extract_sanitized_business(
@@ -93,7 +97,6 @@ async def extract_sanitized_business(
     parsed_data = sanitize_llm_json(response.text)
     result = BusinessRuleSchema(**parsed_data)
 
-    # Log token usage for cost tracking / observability
     usage = getattr(response, "usage_metadata", None)
     if usage:
         log.info(

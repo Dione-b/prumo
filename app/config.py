@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     # Cloud Synthesis
     gemini_api_key: SecretStr
     gemini_synthesis_model: str = "gemini-2.5-pro"
+    gemini_flash_model: str = "gemini-2.5-flash"
     gemini_temperature: float = 0.2
 
     # Local Ingestion (Ollama)

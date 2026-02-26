@@ -19,8 +19,8 @@ import uuid
 from dataclasses import dataclass
 from uuid import UUID
 
-import google.generativeai as genai
 import structlog
+from google import genai
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,7 +32,7 @@ from app.services.document_processor import DocumentProcessor
 
 logger = structlog.get_logger()
 
-genai.configure(api_key=settings.gemini_api_key.get_secret_value())  # type: ignore[attr-defined]
+client = genai.Client(api_key=settings.gemini_api_key.get_secret_value())
 
 
 @dataclass(frozen=True)
@@ -98,21 +98,18 @@ def _extract_from_chunk_sync(chunk: str) -> EntityExtractionResult:
     Honra C_03: instancia GenerativeModel por chamada, sem singleton,
     porque cada thread precisa da sua própria instância.
     """
-    model = genai.GenerativeModel(  # type: ignore[attr-defined]
-        model_name="gemini-1.5-flash-002",
-        system_instruction=_EXTRACTION_SYSTEM_INSTRUCTION,
-    )
-
-    response = model.generate_content(
-        chunk,
-        generation_config=genai.GenerationConfig(  # type: ignore[attr-defined]
+    response = client.models.generate_content(
+        model=settings.gemini_flash_model,
+        contents=chunk,
+        config=genai.types.GenerateContentConfig(
             response_mime_type="application/json",
             response_schema=EntityExtractionResult,
             temperature=0.0,
+            system_instruction=_EXTRACTION_SYSTEM_INSTRUCTION,
         ),
     )
 
-    return EntityExtractionResult.model_validate_json(response.text)
+    return EntityExtractionResult.model_validate_json(str(response.text))
 
 
 async def extract_entities_from_chunks(

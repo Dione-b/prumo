@@ -72,6 +72,14 @@ class KnowledgeAnswer(BaseModel):
 
         return self
 
+    @model_validator(mode="after")
+    def apply_c_01_downgrades(self) -> "KnowledgeAnswer":
+        """Downgrade to MEDIUM if explicit cache was unavailable."""
+        if any("explicit_cache_unavailable" in w for w in self._warnings):
+            if self.confidence_level == "HIGH":
+                object.__setattr__(self, "confidence_level", "MEDIUM")
+        return self
+
     @property
     def warnings(self) -> list[str]:
         return self._warnings

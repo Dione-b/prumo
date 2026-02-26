@@ -13,8 +13,8 @@ from __future__ import annotations
 import asyncio
 from uuid import UUID
 
-import google.generativeai as genai  # type: ignore[import-untyped]
 import structlog
+from google import genai
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,7 +24,7 @@ from app.models.graph import GraphEdge, GraphNode
 
 logger = structlog.get_logger()
 
-genai.configure(api_key=settings.gemini_api_key.get_secret_value())  # type: ignore[attr-defined]
+client = genai.Client(api_key=settings.gemini_api_key.get_secret_value())
 
 # Minimum number of nodes required before community detection is useful.
 _MIN_NODES_FOR_COMMUNITY = 5
@@ -168,11 +168,13 @@ async def run_community_detection(
 
 def _generate_summary_sync(entities_text: str) -> str:
     """Generate a community summary via Flash — runs in thread."""
-    model = genai.GenerativeModel(  # type: ignore[attr-defined]
-        model_name="gemini-1.5-flash-002",
-        system_instruction=_COMMUNITY_SUMMARY_INSTRUCTION,
+    response = client.models.generate_content(
+        model=settings.gemini_flash_model,
+        contents=entities_text,
+        config=genai.types.GenerateContentConfig(
+            system_instruction=_COMMUNITY_SUMMARY_INSTRUCTION,
+        ),
     )
-    response = model.generate_content(entities_text)
     return str(response.text).strip()
 
 

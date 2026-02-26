@@ -13,7 +13,7 @@ from app.core.exceptions import AppError
 from app.database import async_session_factory
 from app.logger import setup_logging
 from app.models.project import Project
-from app.routers import ingest, knowledge, projects, test_ui
+from app.routers import ingest, knowledge, projects, prompts, test_ui
 
 setup_logging()
 
@@ -78,6 +78,7 @@ app = FastAPI(
 app.include_router(projects.router)
 app.include_router(ingest.router)
 app.include_router(knowledge.router)
+app.include_router(prompts.router)
 app.include_router(test_ui.router)
 
 

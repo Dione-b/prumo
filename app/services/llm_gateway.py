@@ -61,12 +61,16 @@ class LLMGateway:
 
         for attempt in range(1, 4):
             try:
+                thinking_models = ["qwen3", "deepseek"]
+                model_name = settings.ollama_business_model.lower()
+                should_think = any(m in model_name for m in thinking_models)
+
                 # 2. Call self.ollama_client.chat.
                 response = await client.chat(
                     model=settings.ollama_business_model,
                     messages=messages,
                     tools=tools,
-                    think=True,
+                    think=should_think,
                     options={"num_predict": 2048},
                 )
 
@@ -77,10 +81,12 @@ class LLMGateway:
                 )
 
                 # C_01: Capture and log thinking trace
-                thinking_trace = getattr(
-                    message, "thinking", message.get("thinking", "")
-                )
-                if thinking_trace:
+                thinking_trace = ""
+                if hasattr(message, "thinking") and message.thinking:
+                    thinking_trace = message.thinking
+                    logger.info("ollama_thinking_trace", thinking=thinking_trace)
+                elif isinstance(message, dict) and message.get("thinking"):
+                    thinking_trace = message["thinking"]
                     logger.info("ollama_thinking_trace", thinking=thinking_trace)
 
                 tool_calls = getattr(
