@@ -154,6 +154,9 @@ class PromptGeneratorService:
     calls are deferred to the individual query engines.
     """
 
+    def __init__(self, storage: "IOutputStorage") -> None:
+        self._storage = storage
+
     async def generate_prompt(
         self,
         session: AsyncSession,
@@ -230,10 +233,26 @@ class PromptGeneratorService:
             all_citations.extend(global_answer.citations)
 
         strategies = list(_TIER_STRATEGIES.get(tier, []))
+        
+        # 9. Save content using abstracted storage (TTL de 7 dias = 604800s)
+        metadata = {
+            "intent": task_intent,
+            "target_files": target_files,
+            "tier": tier,
+            "confidence": confidence,
+            "strategies": strategies
+        }
+        prompt_id = await self._storage.save(
+            project_id=project_id,
+            content=yaml_prompt,
+            metadata=metadata,
+            ttl=3600 * 24 * 7
+        )
 
-        # 9. Return — model_validator auto-enforces confidence downgrade.
+        # 10. Return — model_validator auto-enforces confidence downgrade.
         return GeneratedPrompt(
             yaml_prompt=yaml_prompt,
+            prompt_id=prompt_id,
             tier=tier,
             strategies_applied=strategies,
             confidence=confidence,

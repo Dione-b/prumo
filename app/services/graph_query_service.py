@@ -86,6 +86,64 @@ async def _get_query_embedding(question: str) -> list[float]:
     """Get embedding for the query string."""
     return await asyncio.to_thread(_embed_query_sync, question)
 
+# Circuit Breaker State per Project
+_circuit_breaker_failures: dict[UUID, int] = {}
+_circuit_breaker_tests: dict[UUID, int] = {}
+_HALF_OPEN_INTERVAL = 5
+
+
+async def _check_graph_health(
+    session: AsyncSession, project_id: UUID
+) -> bool:
+    """Calculates invalid edge percentage. True if healthy, False if breaker open."""
+    stmt = text("""
+        SELECT
+            COUNT(*) as total,
+            SUM(CASE WHEN is_valid = false THEN 1 ELSE 0 END) as invalid
+        FROM graph_edges
+        WHERE project_id = :project_id
+    """)
+    
+    res = await session.execute(stmt, {"project_id": str(project_id)})
+    row = res.first()
+    if not row or row[0] == 0:
+        return True
+        
+    total = row[0]
+    invalid = row[1] or 0
+    ratio = invalid / total
+    
+    return ratio < settings.graph_invalid_threshold
+
+
+async def _circuit_breaker_allow_request(
+    session: AsyncSession, project_id: UUID, ignore_health: bool
+) -> bool:
+    """True se circuito fechado (permite), False se aberto (força fallback)."""
+    if ignore_health:
+        return True
+        
+    is_open = project_id in _circuit_breaker_failures and _circuit_breaker_failures[project_id] >= 1
+    
+    if is_open:
+        # Mecanismo meia-abertura
+        _circuit_breaker_tests[project_id] = _circuit_breaker_tests.get(project_id, 0) + 1
+        if _circuit_breaker_tests[project_id] >= _HALF_OPEN_INTERVAL:
+            _circuit_breaker_tests[project_id] = 0
+            healthy = await _check_graph_health(session, project_id)
+            if healthy:
+                del _circuit_breaker_failures[project_id]
+                return True
+            return False
+        return False
+        
+    healthy = await _check_graph_health(session, project_id)
+    if not healthy:
+        _circuit_breaker_failures[project_id] = 1
+        return False
+        
+    return True
+
 
 async def _find_similar_nodes(
     session: AsyncSession,
@@ -105,6 +163,7 @@ async def _find_similar_nodes(
         FROM graph_nodes
         WHERE project_id = :project_id
             AND embedding IS NOT NULL
+            AND is_valid = true
         ORDER BY embedding <=> :query_embedding::vector
         LIMIT :top_k
     """)
@@ -243,8 +302,20 @@ async def local_query(
     session: AsyncSession,
     project_id: UUID,
     question: str,
+    force_graph: bool = False,
+    ignore_health: bool = False,
 ) -> KnowledgeAnswer:
     """LOCAL query: embed → pgvector → CTE expand → synthesis."""
+    if not await _circuit_breaker_allow_request(session, project_id, ignore_health) and not force_graph:
+        logger.warning("circuit_breaker_open_fallback", project_id=str(project_id))
+        answer = KnowledgeAnswer(
+            answer="Graph is currently unavailable due to integrity degradation. Using Phase 2 fallback.",
+            confidence_level="LOW",
+            citations=[]
+        )
+        answer._warnings.append("circuit_breaker_open")
+        return answer
+
     query_embedding = await _get_query_embedding(question)
 
     similar_nodes = await _find_similar_nodes(session, project_id, query_embedding)
@@ -275,8 +346,20 @@ async def global_query(
     session: AsyncSession,
     project_id: UUID,
     question: str,
+    force_graph: bool = False,
+    ignore_health: bool = False,
 ) -> KnowledgeAnswer:
     """Execute a GLOBAL query: community summaries → synthesis."""
+    if not await _circuit_breaker_allow_request(session, project_id, ignore_health) and not force_graph:
+        logger.warning("circuit_breaker_open_fallback", project_id=str(project_id))
+        answer = KnowledgeAnswer(
+            answer="Graph is currently unavailable due to integrity degradation. Using Phase 2 fallback.",
+            confidence_level="LOW",
+            citations=[]
+        )
+        answer._warnings.append("circuit_breaker_open")
+        return answer
+
     # Fetch community summaries by aggregating node data per community.
     stmt = (
         select(
@@ -288,6 +371,7 @@ async def global_query(
         .where(
             GraphNode.project_id == project_id,
             GraphNode.community_id.is_not(None),
+            GraphNode.is_valid == True,  # Filter by validity
         )
         .group_by(GraphNode.community_id)
     )
@@ -348,13 +432,17 @@ async def hybrid_query(
     session: AsyncSession,
     project_id: UUID,
     question: str,
+    force_graph: bool = False,
+    ignore_health: bool = False,
 ) -> KnowledgeAnswer:
     """Execute a HYBRID query: Local → check confidence → Global if needed → merge.
 
     This is the default query mode. Falls back gracefully to local-only
     if community structure is not yet available.
     """
-    local_answer = await local_query(session, project_id, question)
+    local_answer = await local_query(
+        session, project_id, question, force_graph=force_graph, ignore_health=ignore_health
+    )
 
     # If local confidence is sufficient, return immediately.
     if local_answer.confidence_level == "HIGH":
@@ -367,7 +455,9 @@ async def hybrid_query(
 
     # Escalate to global query.
     try:
-        global_answer = await global_query(session, project_id, question)
+        global_answer = await global_query(
+            session, project_id, question, force_graph=force_graph, ignore_health=ignore_health
+        )
     except Exception:  # noqa: BLE001
         logger.warning(
             "hybrid_query_global_fallback_failed",

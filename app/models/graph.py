@@ -6,7 +6,7 @@ from typing import Any
 
 from pgvector.sqlalchemy import Vector  # type: ignore[import-untyped]
 from sqlalchemy import DateTime as SADateTime
-from sqlalchemy import Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
@@ -54,6 +54,8 @@ class GraphNode(Base):
         server_default="'[]'::jsonb",
     )
     community_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    is_valid: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(
         SADateTime(timezone=True),
@@ -112,6 +114,8 @@ class GraphEdge(Base):
         nullable=False,
         server_default="'[]'::jsonb",
     )
+
+    is_valid: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(
         SADateTime(timezone=True),

@@ -54,6 +54,7 @@ class GeneratedPrompt(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     yaml_prompt: str
+    prompt_id: str = ""
     tier: PromptTier
     strategies_applied: list[str]
     confidence: Literal["HIGH", "MEDIUM", "LOW"]

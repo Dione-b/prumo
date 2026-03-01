@@ -22,6 +22,7 @@ class ExtractedEntity(BaseModel):
         min_length=1,
         description="Concise explanation of what this entity represents.",
     )
+    is_valid: bool = True
 
 
 class ExtractedRelation(BaseModel):
@@ -41,6 +42,7 @@ class ExtractedRelation(BaseModel):
         ..., min_length=1, description="Contextual detail about this relation."
     )
     confidence: Literal["HIGH", "MEDIUM", "LOW"] = "MEDIUM"
+    is_valid: bool = True
 
 
 class EntityExtractionResult(BaseModel):
@@ -56,8 +58,10 @@ class EntityExtractionResult(BaseModel):
     relations: list[ExtractedRelation] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def validate_no_dangling_relations(self) -> EntityExtractionResult:
-        """C_01: Validate all relation endpoints reference known entities."""
+    def flag_dangling_relations(self) -> EntityExtractionResult:
+        """C_01: Flag any relation endpoints that reference unknown entities.
+        Instead of removing them, flip is_valid to False.
+        """
         entity_names = {e.name for e in self.entities}
         dangling: list[str] = []
 
@@ -72,13 +76,17 @@ class EntityExtractionResult(BaseModel):
                 )
 
         if dangling:
-            # Remove dangling relations instead of raising — LLM output is noisy.
-            clean_relations = [
-                r
-                for r in self.relations
-                if r.source in entity_names and r.target in entity_names
-            ]
-            object.__setattr__(self, "relations", clean_relations)
+            updated_relations = []
+            for r in self.relations:
+                if r.source not in entity_names or r.target not in entity_names:
+                    # Mutable assignment em modelo Pydantic frozen
+                    updated_rel = r.model_copy()
+                    object.__setattr__(updated_rel, 'is_valid', False)
+                    updated_relations.append(updated_rel)
+                else:
+                    updated_relations.append(r)
+
+            object.__setattr__(self, "relations", updated_relations)
 
         return self
 
@@ -93,6 +101,7 @@ class NodeContext(BaseModel):
     description: str
     score: float = Field(..., ge=0.0, le=1.0, description="Cosine similarity score.")
     community_id: int | None = None
+    is_valid: bool = True
 
 
 class EdgeContext(BaseModel):
@@ -106,6 +115,7 @@ class EdgeContext(BaseModel):
     description: str
     weight: float = 1.0
     confidence: Literal["HIGH", "MEDIUM", "LOW"] = "MEDIUM"
+    is_valid: bool = True
 
 
 class CommunityInfo(BaseModel):

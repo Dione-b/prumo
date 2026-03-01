@@ -46,6 +46,7 @@ class GraphExtractionReport:
     error: str | None = None
     skipped: bool = False
     skip_reason: str | None = None
+    confidence_downgrade: str | None = None
 
 
 # Rate-limit pause between Flash calls — configurable via GEMINI_FLASH_DELAY_MS.
@@ -248,6 +249,7 @@ async def upsert_graph_data(
             description=relation.description,
             confidence=relation.confidence,
             source_document_ids=[doc_id_str],
+            is_valid=relation.is_valid,
         )
         session.add(edge)
 
@@ -329,11 +331,24 @@ async def safe_extract_and_upsert(
             relations=len(extraction.relations),
         )
 
+        invalid_relations = sum(1 for r in extraction.relations if not r.is_valid)
+        confidence_downgrade = None
+
+        if invalid_relations > 0:
+            confidence_downgrade = "LOW"
+            logger.warning(
+                "graph_extraction_structural_degradation",
+                document_id=str(document_id),
+                invalid_relations=invalid_relations,
+                total_relations=len(extraction.relations)
+            )
+
         return GraphExtractionReport(
             document_id=document_id,
             success=True,
             entities_count=len(extraction.entities),
             relations_count=len(extraction.relations),
+            confidence_downgrade=confidence_downgrade,
         )
 
     except Exception as exc:  # noqa: BLE001

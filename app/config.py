@@ -29,11 +29,18 @@ class Settings(BaseSettings):
         60, ge=0, description="Minimum delay between Flash API calls in ms"
     )
 
+    # Storage and Config
+    prompt_storage_backend: str = "database" # "local", "database", "both"
+    graph_invalid_threshold: float = Field(
+        0.3, ge=0.0, le=1.0, description="Percentual de limites para invalidar circuit breaker no graphql."
+    )
+
     # Local Ingestion (Ollama)
     ollama_base_url: str = "http://localhost:11434"
     ollama_business_model: str = "llama3.2:3b"
     ollama_embedding_model: str = "qwen3-embedding:0.6b"
     ollama_embedding_dim: int = 1024  # Standard for Qwen3-0.6b
+    ollama_workers: int = 2
     ollama_max_concurrent: int = 1
     ollama_keep_alive: int = Field(
         0,
@@ -41,7 +48,7 @@ class Settings(BaseSettings):
         description="Seconds to keep model in VRAM after request (0 = offload)",
     )
     ollama_request_timeout: int = Field(
-        120, ge=10, description="Timeout in seconds for Ollama semaphore acquisition"
+        300, ge=10, description="Timeout in seconds for Ollama priority queue waiting"
     )
 
     # Paths

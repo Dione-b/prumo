@@ -33,9 +33,9 @@ Three core constraints are enforced across every module:
 - **Multi-File & Binary Streaming**: Synchronous batch ingestion for raw text, PDFs, and DOCX files. Heavy binaries stream directly to disk without memory spikes. Incorporates real-time `pypdf` extraction to handle latin-1 encoded PDF buffers reliably.
 - **Local Native Async Extraction**: Routes structured data extraction (Business Rules) to **Llama 3.2** via a local Ollama instance utilizing the **Ollama 2026 SDK** with Native Tool Calling and automated Pydantic schema conversion.
 - **Dynamic Thinking Detection**: The `LLMGateway` dynamically evaluates the configured `OLLAMA_BUSINESS_MODEL` against a whitelist of thinking-capable models (Qwen 3, DeepSeek) before injecting the `think` parameter — preventing 400 errors on non-thinking models like Llama 3.2.
-- **VRAM-Safe Orchestration**: A strict sequential orchestration uses a global `asyncio.Semaphore` (`max_concurrent=1`) and aggressive model offloading (`keep_alive=0` via `options`) to ensure extraction and embeddings never overlap, protecting consumer GPUs from OOM failures.
-- **Thinking & Downgrade Resilience (C_01)**: Captures model `thinking` traces to audit high-fidelity rules. Contradictory reasoning or hardware timeouts trigger graceful degradation, adjusting confidence downward instead of breaking the batch.
-- **Transactional Consistency (C_03)**: Uses nested DB transactions/savepoints where the background task orchestrator acts as the sole boundary owner.
+- **VRAM-Safe Orchestration**: A strict sequential orchestration uses a high-performance **Priority Scheduler** with **Aging** and worker-pool execution (`OLLAMA_WORKERS=2`). This replaces the global semaphore, preventing starvation of low-priority tasks while ensuring model isolation via aggressive offloading (`keep_alive=0`).
+- **Transactional Consistency (C_03)**: Uses nested DB transactions/savepoints where the background task orchestrator acts as the sole boundary owner. Services never commit, preserving the constitutional atomicity.
+- **Integrity Gating (C_01)**: Implements persistent validation of extracted entities. Dangling relations are no longer silently dropped; they are persisted with an `is_valid=False` flag. High rates of invalid data trigger immediate confidence downgrades (`LOW`) in extraction reports.
 
 ### 2. Context Orchestration & RAG (Phase 2)
 
@@ -47,22 +47,29 @@ Three core constraints are enforced across every module:
 
 ### 3. Graph-RAG with LightRAG Pattern (Phase 3)
 
-- **Knowledge Graph Extraction**: Automatically extracts semantic entities and relations using **Gemini Flash** safely inside background tasks.
+- **Knowledge Graph Extraction**: Automatically extracts semantic entities and relations using **Gemini Flash**. Relations are verified for referential integrity and stored with validity flags.
 - **pgvector HNSW Index**: Entities are locally embedded using **Qwen3 (via Ollama)** and indexed via pgvector HNSW (`m=16`, `ef_construction=64`) for cosine similarity search.
-- **Community Detection**: Leiden algorithm (via `leidenalg` + `igraph`) discovers thematic clusters. Community summaries are generated via Gemini Flash in `asyncio.to_thread`.
+- **Community Detection**: Leiden algorithm discovers thematic clusters. Community summaries are generated via Gemini Flash.
+- **Circuit Breaker Health Check**: The `GraphQueryService` monitors graph health in real-time. If the percentage of invalid edges exceeds `GRAPH_INVALID_THRESHOLD` (default 0.3), the **Circuit Breaker opens**, forcing an automatic fallback to Phase 2 cache/semantic search to ensure reliable RAG output.
 - **Three Query Modes**:
   - `local` — Entity-level: pgvector similarity → recursive CTE edge traversal → Pro synthesis.
   - `global` — Community-level: aggregated community summaries → Pro synthesis.
   - `hybrid` (default) — Local first → confidence gating → Global escalation → merge synthesis.
-- **Graceful Degradation**: `READY_PARTIAL` status when graph extraction fails but cache is available; hybrid mode falls back to Phase 2 cache routing when the graph is empty.
+- **Graceful Degradation**: `READY_PARTIAL` status when graph extraction fails; hybrid mode falls back to Phase 2 cache routing when the graph is empty or the circuit breaker is open.
 
 ### 4. Prompt Generation Engine (Phase 3b)
 
 - **Synthesis Engine**: Uses **Gemini 2.5 Pro** via `asyncio.to_thread` (C_02) to synthesize context and assemble structured YAML prompts for downstream LLM agents.
-- **Tiered Strategy**: Classifies tasks as `SIMPLE` (entity-level context) or `COMPLEX` (community context + few-shot examples + code skeletons) based on intent keyword scanning and target file count.
-- **Constitutional Constraints**: Injects C_01/C_02/C_03 invariants, project-specific technical constraints, few-shot anti-pattern examples, and validation checklists automatically into the generated YAML.
-- **Confidence-Aware Output**: Confidence is derived from graph availability and auto-downgraded via `model_validator` when context is degraded (1 blocking warning → MEDIUM, 2+ → LOW).
-- **REST API**: `POST /prompts/generate-cursor-yaml` generates the prompt (DTO via service, C_03) and persists the `.yaml` to `outputs/` as a router-level side effect.
+- **Tiered Strategy**: Classifies tasks as `SIMPLE` (entity-level context) or `COMPLEX` (community context + few-shot examples + code skeletons).
+- **Abstracted Storage (ADR-003)**: Fully decoupled from the file system via the `IOutputStorage` repository pattern.
+  - **Local Strategy**: Safe asychronous file I/O (C_02) with manual TTL cleaning.
+  - **Database Strategy**: Persistent storage in the `generated_prompts` table for containerized environments.
+  - **Hybrid (Both)**: Writes to both backends for maximum redundancy.
+- **Opaque Identifiers**: Internal file paths are never exposed. Prompts are identified by UUIDs (`prompt_id`) and served via authenticated download endpoints.
+- **Confidence-Aware Output**: Confidence is auto-downgraded via `model_validator` when context is degraded (e.g., graph blocking warnings).
+- **REST API**:
+  - `POST /prompts/generate-cursor-yaml` — Generates and persists the prompt.
+  - `GET /prompts/{prompt_id}` — Retrieves the generated YAML for client-side download.
 
 ### 5. Developer Experience & Quality
 
@@ -108,6 +115,10 @@ app/
 │   ├── graph.py                        # EntityExtractionResult, NodeContext, EdgeContext
 │   ├── business_rule.py                # BusinessRuleSchema (Pydantic + Ollama tool target)
 │   └── prompt_generator.py             # PromptTier, PromptStrategyConfig, GeneratedPrompt (C_01)
+├── infrastructure/
+│   └── storage/                       # Storage adapters (Local, Database, Hybrid)
+├── interfaces/
+│   └── storage.py                     # IOutputStorage Protocol (ADR-003)
 ├── utils/
 │   └── tool_converter.py              # Pydantic → Ollama Native Tool conversion
 ├── services/
@@ -171,6 +182,11 @@ app/
     | `GEMINI_FLASH_MODEL`     | Fast model (default: `gemini-2.5-flash`)                |
     | `OLLAMA_BUSINESS_MODEL`  | Local extraction model (default: `llama3.2:3b`)         |
     | `OLLAMA_EMBEDDING_MODEL` | Local embedding model (default: `qwen3-embedding:0.6b`) |
+
+| `PROMPT_STORAGE_BACKEND` | Storage strategy (`local`, `database`, `both`) |
+| `GRAPH_INVALID_THRESHOLD`| Max invalid edge ratio (default `0.3`) |
+| `OLLAMA_WORKERS` | Concurrent local workers (default `2`) |
+| `OLLAMA_REQUEST_TIMEOUT` | Max wait for model scheduling (default `300`) |
 
 3.  **Database Migration**:
 
@@ -243,7 +259,16 @@ curl -X POST http://localhost:8000/prompts/generate-cursor-yaml \
   }'
 ```
 
-Returns a structured YAML prompt saved to `outputs/` with confidence metadata.
+Returns a structured JSON with a `prompt_id`.
+
+### Prompt Retrieval
+
+```bash
+curl -X GET 'http://localhost:8000/prompts/<prompt_id>?project_id=...' \
+  -H 'X-API-Key: <YOUR_KEY>'
+```
+
+Returns the raw YAML content for the agent to use.
 
 ---
 

@@ -13,6 +13,7 @@ from .graph import GraphNode as GraphNode  # noqa: E402
 from .knowledge import KnowledgeDocument as KnowledgeDocument  # noqa: E402
 from .plan import Plan as Plan  # noqa: E402
 from .project import Project as Project  # noqa: E402
+from .prompt import GeneratedPromptModel as GeneratedPromptModel  # noqa: E402
 
 __all__ = [
     "Base",
@@ -22,4 +23,5 @@ __all__ = [
     "KnowledgeDocument",
     "GraphNode",
     "GraphEdge",
+    "GeneratedPromptModel",
 ]
