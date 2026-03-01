@@ -11,9 +11,11 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
+from app.config import settings
+
 from . import Base
 
-EMBEDDING_DIMENSIONS = 768
+EMBEDDING_DIMENSIONS = settings.ollama_embedding_dim
 
 
 class GraphNode(Base):
@@ -40,7 +42,7 @@ class GraphNode(Base):
     entity_type: Mapped[str] = mapped_column(String(50), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
 
-    # pgvector Vector(768) — type: ignore because pgvector stubs are untyped.
+    # pgvector Vector(1024) — type: ignore because pgvector stubs are untyped.
     embedding: Mapped[list[float] | None] = mapped_column(  # type: ignore[assignment]
         Vector(EMBEDDING_DIMENSIONS),
         nullable=True,

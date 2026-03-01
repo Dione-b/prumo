@@ -79,12 +79,8 @@ def upgrade() -> None:
     )
 
     # B-tree indexes for common lookups.
-    op.create_index(
-        "ix_graph_nodes_project_id", "graph_nodes", ["project_id"]
-    )
-    op.create_index(
-        "ix_graph_nodes_community_id", "graph_nodes", ["community_id"]
-    )
+    op.create_index("ix_graph_nodes_project_id", "graph_nodes", ["project_id"])
+    op.create_index("ix_graph_nodes_community_id", "graph_nodes", ["community_id"])
 
     # --- graph_edges ---
     op.create_table(
@@ -95,9 +91,7 @@ def upgrade() -> None:
         sa.Column("target_node_id", sa.UUID(), nullable=False),
         sa.Column("relation_type", sa.String(length=100), nullable=False),
         sa.Column("description", sa.Text(), nullable=False),
-        sa.Column(
-            "weight", sa.Float(), nullable=False, server_default=sa.text("1.0")
-        ),
+        sa.Column("weight", sa.Float(), nullable=False, server_default=sa.text("1.0")),
         sa.Column(
             "confidence",
             sa.String(length=10),
@@ -130,15 +124,9 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
     )
 
-    op.create_index(
-        "ix_graph_edges_project_id", "graph_edges", ["project_id"]
-    )
-    op.create_index(
-        "ix_graph_edges_source_node_id", "graph_edges", ["source_node_id"]
-    )
-    op.create_index(
-        "ix_graph_edges_target_node_id", "graph_edges", ["target_node_id"]
-    )
+    op.create_index("ix_graph_edges_project_id", "graph_edges", ["project_id"])
+    op.create_index("ix_graph_edges_source_node_id", "graph_edges", ["source_node_id"])
+    op.create_index("ix_graph_edges_target_node_id", "graph_edges", ["target_node_id"])
 
     # --- Update KnowledgeDocument status constraint ---
     # Drop old constraint, re-create with READY_PARTIAL included.

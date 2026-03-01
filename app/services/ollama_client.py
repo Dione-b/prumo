@@ -35,15 +35,19 @@ class OllamaClient:
     ) -> Any:
         """Sends a chat request with thinking and tool support."""
         try:
-            # We use a short wait to trigger C_01 if the semaphore is stuck
-            await asyncio.wait_for(self._global_semaphore.acquire(), timeout=300)
+            await asyncio.wait_for(
+                self._global_semaphore.acquire(),
+                timeout=settings.ollama_request_timeout,
+            )
             try:
                 kwargs: dict[str, Any] = {
                     "model": model,
                     "messages": messages,
                 }
 
-                final_options: dict[str, Any] = {"keep_alive": 0}
+                final_options: dict[str, Any] = {
+                    "keep_alive": settings.ollama_keep_alive,
+                }
                 if options is not None:
                     final_options.update(options)
                 kwargs["options"] = final_options
@@ -62,14 +66,17 @@ class OllamaClient:
             raise exc
 
     async def generate(self, model: str, prompt: str, format: str = "") -> Any:
-        """Sends a generate request with strict keep_alive=0."""
+        """Sends a generate request with strict VRAM offload."""
         try:
-            await asyncio.wait_for(self._global_semaphore.acquire(), timeout=300)
+            await asyncio.wait_for(
+                self._global_semaphore.acquire(),
+                timeout=settings.ollama_request_timeout,
+            )
             try:
                 kwargs: dict[str, Any] = {
                     "model": model,
                     "prompt": prompt,
-                    "options": {"keep_alive": 0},
+                    "options": {"keep_alive": settings.ollama_keep_alive},
                 }
                 if format:
                     kwargs["format"] = format
@@ -82,14 +89,17 @@ class OllamaClient:
             raise exc
 
     async def embed(self, model: str, input_texts: list[str]) -> Any:
-        """Sends an embedding request with strict keep_alive=0."""
+        """Sends an embedding request with strict VRAM offload."""
         try:
-            await asyncio.wait_for(self._global_semaphore.acquire(), timeout=300)
+            await asyncio.wait_for(
+                self._global_semaphore.acquire(),
+                timeout=settings.ollama_request_timeout,
+            )
             try:
                 res = await self._client.embed(
                     model=model,
                     input=input_texts,
-                    options={"keep_alive": 0},
+                    options={"keep_alive": settings.ollama_keep_alive},
                 )
                 return res
             finally:

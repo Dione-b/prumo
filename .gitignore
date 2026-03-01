@@ -33,3 +33,5 @@ pip-delete-this-directory.txt
 # Project specific
 /logs/
 /tmp/
+
+/outputs/

@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.database import get_db
 from app.schemas.prompt_generator import (
     GeneratedPrompt,
@@ -25,7 +26,7 @@ logger = structlog.get_logger()
 
 router = APIRouter(prefix="/prompts", tags=["Prompts"])
 
-_OUTPUT_DIR = Path("outputs")
+_OUTPUT_DIR = Path(settings.output_dir)
 
 
 # ── Request / Response Schemas ──────────────────────────────────────────────

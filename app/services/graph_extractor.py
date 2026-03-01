@@ -48,8 +48,8 @@ class GraphExtractionReport:
     skip_reason: str | None = None
 
 
-# Rate-limit pause between Flash calls (≤1000 RPM → 60ms minimum).
-_FLASH_RATE_LIMIT_SECONDS = 0.06
+# Rate-limit pause between Flash calls — configurable via GEMINI_FLASH_DELAY_MS.
+_FLASH_RATE_LIMIT_SECONDS = settings.gemini_flash_delay_ms / 1000.0
 
 # Maximum characters per chunk sent to Flash for extraction.
 _MAX_CHUNK_SIZE = 8_000

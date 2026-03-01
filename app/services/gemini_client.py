@@ -118,4 +118,3 @@ class GeminiClient:
             return str(response.text)
 
         return await asyncio.to_thread(sync_call)
-

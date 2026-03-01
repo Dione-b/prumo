@@ -24,6 +24,7 @@ from app.schemas.knowledge import (
     QueryMode,
 )
 from app.services.gemini_client import GeminiClient
+from app.services.ports.cache_provider import CacheProvider
 from app.services.graph_query_service import global_query, hybrid_query, local_query
 from app.services.knowledge_gemini import (
     answer_question_with_cache,
@@ -233,7 +234,8 @@ class KnowledgeOrchestrator:
     """Manages the explicit -> implicit -> inline fallback chain."""
 
     def __init__(self) -> None:
-        self.gemini_client = GeminiClient()
+        # Structural typing: GeminiClient implements CacheProvider
+        self.gemini_client: CacheProvider = GeminiClient()
 
     async def process_document_caching(
         self,
@@ -242,7 +244,7 @@ class KnowledgeOrchestrator:
     ) -> dict[str, Any]:
         """
         1. count_tokens.
-        2. If tokens >= 4096: Attempt explicit cache (caches.create).
+        2. If tokens >= threshold: Attempt explicit cache (caches.create).
         3. On failure/threshold skip: Mark READY_PARTIAL for implicit fallback.
         """
         update_values: dict[str, Any] = {
@@ -270,13 +272,13 @@ class KnowledgeOrchestrator:
             )
             update_values["metadata_json"]["cached_content_token_count"] = token_count
 
-            # 2. If tokens >= 4096: Attempt explicit cache
-            if token_count >= 4096:
+            # 2. If tokens >= threshold: Attempt explicit cache
+            if token_count >= settings.gemini_explicit_cache_min_tokens:
                 try:
                     cache_name = await self.gemini_client.create_cached_content(
                         content=content_to_measure,
                         model=settings.gemini_synthesis_model,
-                        ttl=3600,
+                        ttl=settings.gemini_cache_ttl,
                     )
                     update_values["gemini_cache_name"] = cache_name
                     # Note: we use UTC now + TTL for expire_time as a simple
@@ -284,7 +286,7 @@ class KnowledgeOrchestrator:
                     from datetime import timedelta
 
                     update_values["cache_expires_at"] = datetime.now(UTC) + timedelta(
-                        seconds=3600
+                        seconds=settings.gemini_cache_ttl
                     )
                 except Exception as exc:
                     logger.warning(

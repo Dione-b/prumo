@@ -119,8 +119,7 @@ class TestGetUploadMime:
 
         # Assert
         assert result == (
-            "application/vnd.openxmlformats-officedocument"
-            ".wordprocessingml.document"
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         )
 
     def test_unknown_binary_returns_octet_stream(self) -> None:
