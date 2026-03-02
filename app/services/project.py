@@ -6,10 +6,14 @@ from app.models.project import Project
 
 
 async def create_project(
-    db: AsyncSession, name: str, description: str | None = None
+    db: AsyncSession, name: str, stack: str, description: str | None = None
 ) -> Project:
     """Create and persist a new Project record."""
-    record = Project(name=name, description=description)
+    record = Project(
+        name=name,
+        description=description,
+        config_json={"stack": stack},
+    )
     db.add(record)
     await db.commit()
     await db.refresh(record)

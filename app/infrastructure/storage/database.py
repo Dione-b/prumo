@@ -1,6 +1,6 @@
 import hashlib
-from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from datetime import UTC, datetime, timedelta
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import select
@@ -26,7 +26,7 @@ class DatabaseStorage(IOutputStorage):
         project_id: UUID,
         content: str,
         metadata: dict[str, Any],
-        ttl: Optional[int] = None,
+        ttl: int | None = None,
     ) -> str:
         """
         Salva o prompt numa tabela de histórico do banco de dados,
@@ -34,9 +34,9 @@ class DatabaseStorage(IOutputStorage):
         """
         checksum = hashlib.sha256(content.encode()).hexdigest()
 
-        expires_at: Optional[datetime] = None
+        expires_at: datetime | None = None
         if ttl is not None and ttl > 0:
-            expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl)
+            expires_at = datetime.now(UTC) + timedelta(seconds=ttl)
 
         prompt_record = GeneratedPromptModel(
             project_id=project_id,
@@ -52,7 +52,7 @@ class DatabaseStorage(IOutputStorage):
 
         return str(prompt_record.id)
 
-    async def get_content(self, project_id: UUID, file_id: str) -> Optional[str]:
+    async def get_content(self, project_id: UUID, file_id: str) -> str | None:
         """
         Recupera conteúdo se ainda for válido e bater com o projeto.
         """
@@ -71,11 +71,9 @@ class DatabaseStorage(IOutputStorage):
         if not record:
             return None
 
-        # Se já expirou via lógica, embora possa estar no banco por não ter varredura ainda
-        if (
-            record.expires_at is not None
-            and record.expires_at < datetime.now(timezone.utc)
-        ):
+        # Se já expirou via lógica, embora possa estar no banco por não ter
+        # varredura ainda.
+        if record.expires_at is not None and record.expires_at < datetime.now(UTC):
             return None
 
         return record.content

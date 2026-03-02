@@ -5,7 +5,7 @@ C_03: File I/O is a router-level side effect — the service returns a pure DTO.
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import Any
 from uuid import UUID
 
 import structlog
@@ -16,9 +16,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
-from app.interfaces.storage import IOutputStorage
-from app.infrastructure.storage.local import LocalStorage
 from app.infrastructure.storage.database import DatabaseStorage
+from app.infrastructure.storage.local import LocalStorage
+from app.interfaces.storage import IOutputStorage
 from app.schemas.prompt_generator import (
     GeneratedPrompt,
     PromptStrategyConfig,
@@ -33,16 +33,23 @@ router = APIRouter(prefix="/prompts", tags=["Prompts"])
 
 # ── Storage Adapter ──────────────────────────────────────────────────────────
 
+
 class BothStorage(IOutputStorage):
     def __init__(self, db_storage: DatabaseStorage, local_storage: LocalStorage):
         self._db = db_storage
         self._local = local_storage
 
-    async def save(self, project_id: UUID, content: str, metadata: dict[str, Any], ttl: int | None = None) -> str:
+    async def save(
+        self,
+        project_id: UUID,
+        content: str,
+        metadata: dict[str, Any],
+        ttl: int | None = None,
+    ) -> str:
         # Save to both, return DB ID as requested by ADR
         await self._local.save(project_id, content, metadata, ttl)
         return await self._db.save(project_id, content, metadata, ttl)
-        
+
     async def get_content(self, project_id: UUID, file_id: str) -> str | None:
         # Prioritize Database
         res = await self._db.get_content(project_id, file_id)
@@ -56,7 +63,10 @@ def get_prompt_storage(session: AsyncSession = Depends(get_db)) -> IOutputStorag
     if backend == "both":
         return BothStorage(DatabaseStorage(session), LocalStorage())
     elif backend == "local":
-        logger.warning("Using 'local' storage single backend in potentially containerized environment.")
+        logger.warning(
+            "Using 'local' storage single backend in "
+            "potentially containerized environment."
+        )
         return LocalStorage()
     else:
         return DatabaseStorage(session)
@@ -92,7 +102,9 @@ class GeneratePromptResponse(BaseModel):
 # ── Dependencies ────────────────────────────────────────────────────────────
 
 
-def get_prompt_service(storage: IOutputStorage = Depends(get_prompt_storage)) -> PromptGeneratorService:
+def get_prompt_service(
+    storage: IOutputStorage = Depends(get_prompt_storage),
+) -> PromptGeneratorService:
     return PromptGeneratorService(storage)
 
 
@@ -149,18 +161,22 @@ async def generate_cursor_yaml(
         yaml_prompt=result.yaml_prompt,
     )
 
+
 @router.get(
     "/{prompt_id}",
     response_class=PlainTextResponse,
-    summary="Download the YAML prompt file by ID"
+    summary="Download the YAML prompt file by ID",
 )
 async def download_prompt(
     prompt_id: str,
     project_id: UUID = Query(...),
-    storage: IOutputStorage = Depends(get_prompt_storage)
+    storage: IOutputStorage = Depends(get_prompt_storage),
 ) -> str:
     """Retrieves the YAML content by ID from the configured storage engine."""
     content = await storage.get_content(project_id, prompt_id)
     if not content:
-        raise HTTPException(status_code=404, detail="Prompt YAML file not found or expired for this project.")
+        raise HTTPException(
+            status_code=404,
+            detail="Prompt YAML file not found or expired for this project.",
+        )
     return content

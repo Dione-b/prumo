@@ -21,7 +21,11 @@ import yaml
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domain.strategies.factory import StrategyResolver
+from app.domain.strategies.prompt_strategy import IPromptStrategy, StrategyPayload
+from app.interfaces.storage import IOutputStorage
 from app.models.business_rule import BusinessRule
+from app.models.project import Project
 from app.schemas.knowledge import KnowledgeAnswer
 from app.schemas.prompt_generator import (
     GeneratedPrompt,
@@ -74,66 +78,6 @@ _TIER_STRATEGIES: dict[PromptTier, list[str]] = {
     ],
 }
 
-_BASE_PROHIBITED: list[str] = [
-    "NEVER call session.commit() inside service or extractor methods"
-    " — transaction boundary belongs to the task owner (C_03).",
-    "NEVER use f-strings to inject dynamic content into LLM system"
-    " instructions — use Gemini content Parts (Strategy 5).",
-    "NEVER call genai.* synchronous methods directly in a coroutine"
-    " — always wrap in asyncio.to_thread() (C_02).",
-    "NEVER assign directly in a frozen model_validator"
-    " — use object.__setattr__(self, field, value) (C_01).",
-    "NEVER annotate Vector columns as Any"
-    " — use list[float] | None with # type: ignore.",
-    "NEVER pass List[UUID] to ANY(:param) in text() queries"
-    " — use CAST(:param AS uuid[]) + str().",
-]
-
-_BASE_REQUIRED: list[str] = [
-    "ALWAYS begin implementation with a <thinking> block covering:"
-    " impact surface, invariant check, transaction boundaries,"
-    " implementation order.",
-    "ALWAYS wrap every synchronous Gemini SDK call in asyncio.to_thread().",
-    "ALWAYS provide complete files with all imports explicit at the top.",
-    "ALWAYS annotate all public method return types (mypy --strict).",
-    "ALWAYS include updated_at in models that participate in cache invalidation.",
-]
-
-_FEW_SHOT_EXAMPLES: dict[str, dict[str, str]] = {
-    "ASYNC_PATTERN": {
-        "wrong": ("result = genai.embed_content(model=m, content=text)"),
-        "correct": (
-            "result = await asyncio.to_thread("
-            "genai.embed_content, model=m, content=text)"
-        ),
-        "rule": ("C_02 — Gemini SDK is synchronous; never block the event loop"),
-    },
-    "TRANSACTION_BOUNDARY": {
-        "wrong": (
-            "await session.commit()  # inside EntityExtractor.extract_and_upsert"
-        ),
-        "correct": (
-            "# commit lives in process_document_task after all branches succeed"
-        ),
-        "rule": "C_03 — service is never the transaction owner",
-    },
-    "PYDANTIC_C01": {
-        "wrong": ("self.confidence = 'LOW'  # direct assign in frozen model_validator"),
-        "correct": ("object.__setattr__(self, 'confidence', 'LOW')"),
-        "rule": ("C_01 — Pydantic v2 frozen models forbid direct field assignment"),
-    },
-    "UUID_ASYNCPG": {
-        "wrong": ("session.execute(text('ANY(:ids)'), {'ids': uuid_list})"),
-        "correct": (
-            "session.execute(text('ANY(CAST(:ids AS uuid[]))'), "
-            "{'ids': [str(u) for u in uuid_list]})"
-        ),
-        "rule": (
-            "asyncpg cannot adapt list[UUID] in text() queries without explicit cast"
-        ),
-    },
-}
-
 # Maximum symbols per file for skeleton generation.
 _MAX_SKELETONS_PER_FILE = 5
 
@@ -154,7 +98,7 @@ class PromptGeneratorService:
     calls are deferred to the individual query engines.
     """
 
-    def __init__(self, storage: "IOutputStorage") -> None:
+    def __init__(self, storage: IOutputStorage) -> None:
         self._storage = storage
 
     async def generate_prompt(
@@ -184,13 +128,26 @@ class PromptGeneratorService:
         cfg = strategy_overrides or PromptStrategyConfig()
         warnings: list[str] = []
 
+        # 0. Load Project to infer strategy
+        stmt_project = select(Project).where(Project.id == project_id)
+        project_res = await session.execute(stmt_project)
+        project = project_res.scalar_one_or_none()
+
+        cfg_json = project.config_json if project else None
+        desc = project.description if project else None
+
+        strategy = StrategyResolver.resolve(cfg_json, desc)
+        payload = strategy.get_payload()
+
         # 1. Classify tier.
         tier = self._classify_tier(task_intent, target_files)
         if cfg.force_tier is not None:
             tier = cfg.force_tier
 
         # 2. Build constraints from project rules + base.
-        prohibited, required = await self._build_constraints(session, project_id, cfg)
+        prohibited, required = await self._build_constraints(
+            session, project_id, cfg, payload
+        )
 
         # 3. Fetch local graph context.
         local_answer = await self._fetch_local_context(
@@ -207,7 +164,7 @@ class PromptGeneratorService:
         # 5. Build skeletons (COMPLEX + enabled).
         skeletons: list[dict[str, str]] = []
         if tier == PromptTier.COMPLEX and cfg.include_skeletons:
-            skeletons = self._build_skeletons(target_files, local_answer)
+            skeletons = self._build_skeletons(target_files, local_answer, strategy)
 
         # 6. Assemble YAML.
         yaml_prompt = self._assemble_yaml(
@@ -220,6 +177,7 @@ class PromptGeneratorService:
             required=required,
             skeletons=skeletons,
             cfg=cfg,
+            payload=payload,
         )
 
         # 7. Derive confidence.
@@ -233,20 +191,20 @@ class PromptGeneratorService:
             all_citations.extend(global_answer.citations)
 
         strategies = list(_TIER_STRATEGIES.get(tier, []))
-        
+
         # 9. Save content using abstracted storage (TTL de 7 dias = 604800s)
         metadata = {
             "intent": task_intent,
             "target_files": target_files,
             "tier": tier,
             "confidence": confidence,
-            "strategies": strategies
+            "strategies": strategies,
         }
         prompt_id = await self._storage.save(
             project_id=project_id,
             content=yaml_prompt,
             metadata=metadata,
-            ttl=3600 * 24 * 7
+            ttl=3600 * 24 * 7,
         )
 
         # 10. Return — model_validator auto-enforces confidence downgrade.
@@ -286,12 +244,13 @@ class PromptGeneratorService:
         session: AsyncSession,
         project_id: UUID,
         cfg: PromptStrategyConfig,
+        payload: StrategyPayload,
     ) -> tuple[list[str], list[str]]:
         """Aggregate prohibited and required constraints.
 
         C_03: SELECT only — NEVER commits.
 
-        Merges base rules + project-specific technical constraints
+        Merges strategy rules + project-specific technical constraints
         + caller-provided extras.
         """
         stmt = (
@@ -310,9 +269,9 @@ class PromptGeneratorService:
                 project_constraints.extend(constraints_list)
 
         prohibited = (
-            list(_BASE_PROHIBITED) + list(cfg.extra_prohibited) + project_constraints
+            list(payload.prohibited) + list(cfg.extra_prohibited) + project_constraints
         )
-        required = list(_BASE_REQUIRED) + list(cfg.extra_required)
+        required = list(payload.required) + list(cfg.extra_required)
 
         return prohibited, required
 
@@ -385,12 +344,12 @@ class PromptGeneratorService:
         self,
         target_files: list[str],
         local_answer: KnowledgeAnswer,
+        strategy: IPromptStrategy,
     ) -> list[dict[str, str]]:
         """Generate async def skeletons from graph citations.
 
         Extracts entity names from citations and produces skeleton
-        signatures with C_03 compliance docstrings. Caps at 5 symbols
-        per file to avoid prompt overflow.
+        signatures. Caps at 5 symbols per file to avoid prompt overflow.
         """
         entity_names: list[str] = []
         for citation in local_answer.citations:
@@ -414,25 +373,10 @@ class PromptGeneratorService:
         for target_file in target_files:
             file_symbols = unique_names[:_MAX_SKELETONS_PER_FILE]
             for symbol in file_symbols:
-                # Normalize to snake_case for function naming.
-                func_name = (
-                    symbol.lower().replace(" ", "_").replace("-", "_").replace(".", "_")
-                )
                 skeleton = {
                     "file": target_file,
                     "symbol": symbol,
-                    "skeleton": (
-                        f"async def {func_name}(\n"
-                        f"    session: AsyncSession,\n"
-                        f"    # ... params\n"
-                        f") -> ...:\n"
-                        f'    """Handle {symbol}.\n'
-                        f"\n"
-                        f"    C_03: NEVER commits — caller owns"
-                        f" the transaction.\n"
-                        f'    """\n'
-                        f"    ..."
-                    ),
+                    "skeleton": strategy.generate_skeleton(target_file, symbol),
                 }
                 skeletons.append(skeleton)
 
@@ -450,6 +394,7 @@ class PromptGeneratorService:
         required: list[str],
         skeletons: list[dict[str, str]],
         cfg: PromptStrategyConfig,
+        payload: StrategyPayload,
     ) -> str:
         """Assemble all components into a structured YAML prompt.
 
@@ -464,12 +409,7 @@ class PromptGeneratorService:
 
         # ── System Block (Strategy 5: isolated) ──
         prompt["system"] = {
-            "persona": (
-                "Senior Backend Engineer specializing in"
-                " async RAG pipelines. Stack: FastAPI ·"
-                " SQLAlchemy 2.0 async · Pydantic v2 strict"
-                " · pgvector · Gemini SDK."
-            ),
+            "persona": payload.persona,
             "regras_constitucionais": {
                 "proibido": prohibited,
                 "obrigatorio": required,
@@ -481,9 +421,8 @@ class PromptGeneratorService:
             "instrucao": (
                 "ANTES de escrever qualquer código, produza um"
                 " bloco <thinking> com: mapeamento de impacto,"
-                " verificação de invariantes C_01/C_02/C_03,"
-                " fronteiras de transação, sequência de"
-                " implementação."
+                " verificação de invariantes, fronteiras de transação,"
+                " sequência de implementação."
             ),
         }
 
@@ -519,16 +458,11 @@ class PromptGeneratorService:
 
         # ── Few-Shot Block (Strategy 8: COMPLEX only) ──
         if tier == PromptTier.COMPLEX and cfg.include_few_shot:
-            prompt["exemplos_few_shot"] = _FEW_SHOT_EXAMPLES
+            prompt["exemplos_few_shot"] = payload.few_shot_examples
 
         # ── Validation Block ──
         prompt["validacao"] = {
-            "checklist_estatico": [
-                "Nenhum session.commit() em services (C_03)",
-                "Todo genai.* em asyncio.to_thread() (C_02)",
-                "model_validator frozen usa object.__setattr__ (C_01)",
-                "YAML output parseável por yaml.safe_load",
-            ],
+            "checklist_estatico": payload.checklist,
         }
 
         return yaml.dump(

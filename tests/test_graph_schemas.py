@@ -51,8 +51,9 @@ def test_extraction_result_dangling_relations_removed() -> None:
     # Act
     result = EntityExtractionResult(entities=entities, relations=relations)
 
-    # Assert — dangling relation silently removed.
-    assert len(result.relations) == 0
+    # Assert — dangling relation is kept but flagged as invalid.
+    assert len(result.relations) == 1
+    assert not result.relations[0].is_valid
 
 
 def test_extraction_result_empty_is_valid() -> None:

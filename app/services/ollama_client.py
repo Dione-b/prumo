@@ -27,6 +27,7 @@ AGING_DECREMENT = 0.5
 @dataclass(order=True)
 class QueueItem:
     """Item da fila de prioridade do Ollama."""
+
     effective_priority: float
     timestamp: float
     # future can't be ordered so we skip it
@@ -57,7 +58,7 @@ class _OllamaScheduler:
         while True:
             await asyncio.sleep(AGING_INTERVAL_SECONDS)
             now = time.monotonic()
-            
+
             # Recria a fila temporária consumindo a antiga
             temp_queue: list[QueueItem] = []
             while not self.queue.empty():
@@ -66,7 +67,10 @@ class _OllamaScheduler:
                     wait_time = now - item.timestamp
                     intervals = wait_time // AGING_INTERVAL_SECONDS
                     if intervals > 0:
-                        new_priority = max(1.0, item.effective_priority - AGING_DECREMENT * intervals)
+                        new_priority = max(
+                            1.0,
+                            item.effective_priority - AGING_DECREMENT * intervals,
+                        )
                         item.effective_priority = new_priority
                     temp_queue.append(item)
 
@@ -88,7 +92,7 @@ class _OllamaScheduler:
                 worker=name,
                 op=item.operation_type,
                 eff_prio=item.effective_priority,
-                wait_time=start_time - item.timestamp
+                wait_time=start_time - item.timestamp,
             )
 
             try:
@@ -105,7 +109,11 @@ class _OllamaScheduler:
                 if not item.future.done():
                     item.future.set_result(res)
             except Exception as e:
-                logger.exception("ollama_worker_operation_failed", error=str(e), op=item.operation_type)
+                logger.exception(
+                    "ollama_worker_operation_failed",
+                    error=str(e),
+                    op=item.operation_type,
+                )
                 if not item.future.done():
                     item.future.set_exception(e)
             finally:
@@ -115,11 +123,11 @@ class _OllamaScheduler:
         self,
         base_priority: float,
         op: Literal["chat", "generate", "embed"],
-        **kwargs: Any
+        **kwargs: Any,
     ) -> Any:
         loop = asyncio.get_running_loop()
         future = loop.create_future()
-        
+
         item = QueueItem(
             effective_priority=base_priority,
             timestamp=time.monotonic(),
@@ -127,15 +135,22 @@ class _OllamaScheduler:
             operation_type=op,
             kwargs=kwargs,
         )
-        
+
         await self.queue.put(item)
-        
+
         try:
-            return await asyncio.wait_for(future, timeout=settings.ollama_request_timeout)
-        except asyncio.TimeoutError as exc:
-            logger.warning("ollama_operation_timeout", op=op, timeout=settings.ollama_request_timeout)
+            return await asyncio.wait_for(
+                future, timeout=settings.ollama_request_timeout
+            )
+        except TimeoutError as exc:
+            logger.warning(
+                "ollama_operation_timeout",
+                op=op,
+                timeout=settings.ollama_request_timeout,
+            )
             future.cancel()
             raise exc
+
 
 # Singleton local para gerenciar o scheduler
 _scheduler = _OllamaScheduler()
@@ -147,10 +162,10 @@ class OllamaClient:
     def __init__(self) -> None:
         self._scheduler = _scheduler
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> OllamaClient:
         await self._scheduler.start()
         return self
-        
+
     async def chat(
         self,
         model: str,
@@ -193,7 +208,7 @@ class OllamaClient:
         }
         if format:
             kwargs["format"] = format
-            
+
         return await self._scheduler.enqueue(PRIORITY_1, "generate", **kwargs)
 
     async def embed(self, model: str, input_texts: list[str]) -> Any:

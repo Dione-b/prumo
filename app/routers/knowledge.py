@@ -105,3 +105,40 @@ async def query_knowledge(
         )
 
     return result
+
+
+@router.delete("/documents/{document_id}")
+async def delete_document(
+    document_id: UUID,
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    """Delete a document and related graph nodes."""
+    from app.services.graph_services import delete_knowledge_document
+
+    async with db.begin():
+        deleted = await delete_knowledge_document(db, document_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Document not found")
+
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={"message": "Document and associated entities deleted."},
+    )
+
+
+@router.delete("/purge-all")
+async def purge_project_data(
+    project_id: UUID,
+    keep_documents: bool = False,
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    """Purge project graph, optionally purging documents as well."""
+    from app.services.graph_services import purge_project_knowledge
+
+    async with db.begin():
+        await purge_project_knowledge(db, project_id, keep_documents=keep_documents)
+
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={"message": "Project knowledge purged."},
+    )

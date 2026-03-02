@@ -23,10 +23,11 @@ from fastapi import (
 )
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.models.graph import GraphNode
 from app.models.knowledge import KnowledgeDocument
 from app.models.project import Project
 from app.schemas.knowledge import (
@@ -57,14 +58,34 @@ async def dashboard(
 ) -> HTMLResponse:
     """Render the HTMX test dashboard.
 
-    Read-only: fetches all projects for the dropdown.
+    Read-only: fetches all projects for the dropdown
+    and aggregate counts for the top bar.
     No inserts, no commits — compliant with C_03_UoW.
     """
     result = await db.execute(select(Project).order_by(Project.created_at))
     projects = result.scalars().all()
+
+    doc_count_result = await db.execute(select(func.count(KnowledgeDocument.id)))
+    doc_count = doc_count_result.scalar_one()
+
+    node_count_result = await db.execute(select(func.count(GraphNode.id)))
+    node_count = node_count_result.scalar_one()
+
+    # Load recent documents for data management tab
+    docs_result = await db.execute(
+        select(KnowledgeDocument).order_by(KnowledgeDocument.created_at.desc())
+    )
+    recent_docs = docs_result.scalars().all()
+
     return templates.TemplateResponse(
         "index.html",
-        {"request": request, "projects": projects},
+        {
+            "request": request,
+            "projects": projects,
+            "doc_count": doc_count,
+            "node_count": node_count,
+            "recent_docs": recent_docs,
+        },
     )
 
 
@@ -292,6 +313,33 @@ async def ui_status(
         status=status_value,
         error=error_msg,
     )
+    return HTMLResponse(content=html)
+
+
+@router.post("/reprocess/{document_id}", response_class=HTMLResponse)
+async def ui_reprocess(
+    request: Request,
+    document_id: UUID,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+) -> HTMLResponse:
+    """Reprocess a document stuck in READY_PARTIAL."""
+    from app.services.knowledge_gemini import process_document_task
+
+    stmt = select(KnowledgeDocument).where(KnowledgeDocument.id == document_id)
+    result = await db.execute(stmt)
+    doc = result.scalar_one_or_none()
+
+    if doc and doc.status == "READY_PARTIAL":
+        doc.status = "PROCESSING"
+        await db.commit()
+        background_tasks.add_task(process_document_task, doc.id)
+
+    template_str = (
+        "{% from 'snippets.html' import status_polling %}"
+        "{{ status_polling(doc_id, 'PROCESSING') }}"
+    )
+    html = templates.env.from_string(template_str).render(doc_id=document_id)
     return HTMLResponse(content=html)
 
 

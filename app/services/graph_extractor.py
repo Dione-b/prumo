@@ -340,7 +340,7 @@ async def safe_extract_and_upsert(
                 "graph_extraction_structural_degradation",
                 document_id=str(document_id),
                 invalid_relations=invalid_relations,
-                total_relations=len(extraction.relations)
+                total_relations=len(extraction.relations),
             )
 
         return GraphExtractionReport(

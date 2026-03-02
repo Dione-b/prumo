@@ -4,7 +4,7 @@ import json
 import logging
 import uuid
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 from uuid import UUID
 
 from app.config import settings
@@ -64,7 +64,7 @@ class LocalStorage(IOutputStorage):
         project_id: UUID,
         content: str,
         metadata: dict[str, Any],
-        ttl: Optional[int] = None,
+        ttl: int | None = None,
     ) -> str:
         """
         Salva o prompt numa pasta isolada pelo project_id usando um nome UUID
@@ -99,11 +99,11 @@ class LocalStorage(IOutputStorage):
         except Exception as e:
             logger.error("Erro interno ao efetuar TTL de %s: %s", file_id, e)
 
-    async def get_content(self, project_id: UUID, file_id: str) -> Optional[str]:
+    async def get_content(self, project_id: UUID, file_id: str) -> str | None:
         """Recupera conteúdo YAML lendo via thread, útil pra rota GET."""
         yaml_path = self._base_dir / str(project_id) / f"{file_id}.yaml"
 
-        def _read_sync() -> Optional[str]:
+        def _read_sync() -> str | None:
             if not yaml_path.exists() or not yaml_path.is_file():
                 return None
             return yaml_path.read_text(encoding="utf-8")

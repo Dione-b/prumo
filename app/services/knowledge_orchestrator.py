@@ -24,12 +24,12 @@ from app.schemas.knowledge import (
     QueryMode,
 )
 from app.services.gemini_client import GeminiClient
-from app.services.ports.cache_provider import CacheProvider
 from app.services.graph_query_service import global_query, hybrid_query, local_query
 from app.services.knowledge_gemini import (
     answer_question_with_cache,
     process_document_task,
 )
+from app.services.ports.cache_provider import CacheProvider
 
 logger = structlog.get_logger()
 

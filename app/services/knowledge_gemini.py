@@ -27,6 +27,7 @@ from uuid import UUID
 
 import structlog
 from google import genai
+from pypdf import PdfReader
 from sqlalchemy import select, update
 
 from app.config import settings
@@ -122,7 +123,6 @@ async def process_document_task(document_id: UUID) -> None:
         # ── Branch A: File API + Context Caching ──
         if is_binary_upload:
             # Binary: file already on disk (streamed by the router).
-            # NEVER attempt to convert bytes to string.
             if tmp_path_from_router and Path(tmp_path_from_router).exists():
                 upload_path = tmp_path_from_router
             else:
@@ -135,6 +135,33 @@ async def process_document_task(document_id: UUID) -> None:
                     f"Temp file not found for binary document: {tmp_path_from_router}"
                 )
             upload_mime = content_type
+
+            # If it's a PDF and there's no raw_content yet,
+            # extract the text so GraphExtractor can use it
+            if upload_mime == "application/pdf" and not raw_content:
+
+                def _extract_pdf(path: str) -> str:
+                    try:
+                        reader = PdfReader(path)
+                        pages = (p.extract_text() for p in reader.pages)
+                        return "\n\n".join(t for t in pages if t)
+                    except Exception as e:
+                        logger.error(
+                            "pdf_extraction_failed",
+                            error=str(e),
+                            document_id=str(document_id),
+                        )
+                        return ""
+
+                extracted_text = await asyncio.to_thread(_extract_pdf, upload_path)
+                if extracted_text.strip():
+                    raw_content = extracted_text
+                    logger.info(
+                        "pdf_text_extracted",
+                        document_id=str(document_id),
+                        length=len(raw_content),
+                    )
+
         else:
             # Text: materialize content into a temp file for the File API.
             if raw_content is None:
@@ -177,6 +204,9 @@ async def process_document_task(document_id: UUID) -> None:
             }
 
         # Persist Branch A results.
+        if raw_content and is_binary_upload:
+            update_values["raw_content"] = raw_content
+
         async with async_session_maker() as db:
             async with db.begin():
                 await db.execute(
@@ -194,11 +224,15 @@ async def process_document_task(document_id: UUID) -> None:
         # ── Branch B: Entity Extraction + Graph Upsert ──
         # Delegates to safe_extract_and_upsert which owns its session,
         # catches exceptions, and returns a structured report.
+
+        # Gating: force entity extraction if we have raw_content (even for PDFs).
+        extraction_is_binary = is_binary_upload if not raw_content else False
+
         graph_report = await safe_extract_and_upsert(
             project_id=project_id,
             document_id=document_id,
             raw_content=raw_content,
-            is_binary=is_binary_upload,
+            is_binary=extraction_is_binary,
         )
         graph_success = graph_report.success
 

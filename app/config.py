@@ -30,9 +30,12 @@ class Settings(BaseSettings):
     )
 
     # Storage and Config
-    prompt_storage_backend: str = "database" # "local", "database", "both"
+    prompt_storage_backend: str = "database"  # "local", "database", "both"
     graph_invalid_threshold: float = Field(
-        0.3, ge=0.0, le=1.0, description="Percentual de limites para invalidar circuit breaker no graphql."
+        0.3,
+        ge=0.0,
+        le=1.0,
+        description="Percentual de limites para invalidar circuit breaker no graphql.",
     )
 
     # Local Ingestion (Ollama)

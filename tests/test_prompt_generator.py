@@ -1,5 +1,7 @@
 """Tests for PromptGenerator schemas and tier classification."""
 
+from unittest.mock import AsyncMock
+
 import pytest
 
 from app.schemas.prompt_generator import (
@@ -113,7 +115,7 @@ def test_strategy_config_k_seeds_bounds() -> None:
 
 # ── Tier Classification Tests ───────────────────────────────────────────────
 
-_service = PromptGeneratorService()
+_service = PromptGeneratorService(storage=AsyncMock())
 
 
 def test_classify_tier_simple_single_file() -> None:

@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Prumo RAG Testbed</title>
     <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <script src="https://unpkg.com/htmx.org@1.9.10/dist/ext/json-enc.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -60,44 +61,197 @@
         background-color: #059669;
         color: #fff;
       }
+      .tab-btn[aria-selected="true"][data-tab="prompts"] {
+        background-color: #8b5cf6; /* violet-500 */
+        color: #fff;
+      }
+
+      /* Toggle Switch CSS */
+      .toggle-checkbox:checked {
+        right: 0;
+        border-color: #0c8ee6; /* border-prumo-500 */
+      }
+      .toggle-checkbox:checked + .toggle-label {
+        background-color: #0070c4; /* bg-prumo-600 */
+      }
+      .toggle-checkbox:focus + .toggle-label {
+        box-shadow: 0 0 0 2px rgba(12, 142, 230, 0.2);
+      }
     </style>
   </head>
   <body
     class="min-h-screen bg-surface font-sans text-gray-800 antialiased bg-grid"
   >
-    <div
-      class="mx-auto w-full max-w-4xl px-4 py-10 sm:px-6 lg:px-10 xl:max-w-5xl xl:px-12"
-    >
-      <header class="mb-8 text-center">
-        <div
-          class="mb-4 inline-flex h-12 w-12 items-center justify-center rounded-xl bg-prumo-600 text-white shadow-lg shadow-prumo-600/25"
-        >
-          <svg
-            class="h-6 w-6"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="2"
-              d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-            />
-          </svg>
-        </div>
-        <h1 class="text-3xl font-bold tracking-tight text-gray-900 sm:text-4xl">
-          Prumo Context Orchestrator
-        </h1>
-        <p class="mt-2 text-sm text-gray-500 sm:text-base">
-          Envie documentos ou cole texto. Depois consulte a base com perguntas.
-        </p>
-      </header>
+    {% if projects|length == 0 %}
+    <div class="fixed inset-0 z-[100] flex items-center justify-center bg-gray-900/80 backdrop-blur-sm">
+      <div class="w-full max-w-md rounded-2xl bg-white p-8 shadow-2xl">
+        <h2 class="text-2xl font-bold text-gray-900 mb-2">Bem-vindo ao Prumo</h2>
+        <p class="text-sm text-gray-500 mb-6">Nenhum projeto encontrado. Qual o seu desafio hoje?</p>
+        
+        <form hx-post="/projects" hx-ext="json-enc" class="space-y-4">
+          <div>
+            <label class="block text-sm font-medium text-gray-700">Título do Projeto</label>
+            <input type="text" name="name" required placeholder="Ex: Backend Migration" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-prumo-500 focus:ring-prumo-500 sm:text-sm px-3 py-2 border">
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700">Descrição</label>
+            <textarea name="description" placeholder="Descreva brevemente..." class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-prumo-500 focus:ring-prumo-500 sm:text-sm px-3 py-2 border" rows="3"></textarea>
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700">Stack Tecnológica</label>
+            <select name="stack" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-prumo-500 focus:ring-prumo-500 sm:text-sm px-3 py-2 border">
+              <option value="">Selecione...</option>
+              <option value="prumo">Prumo (Python/FastAPI)</option>
+              <option value="rust">Rust (Soroban)</option>
+              <option value="typescript">TypeScript (React/Next)</option>
+              <option value="generic">Outra (Genérica)</option>
+            </select>
+          </div>
+          <button type="submit" class="w-full mt-4 flex justify-center rounded-md border border-transparent bg-prumo-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-prumo-700 focus:outline-none focus:ring-2 focus:ring-prumo-500 focus:ring-offset-2">Iniciar Jornada</button>
+        </form>
+      </div>
+    </div>
+    {% endif %}
 
-      <div class="mb-6" role="tablist" aria-label="Etapas">
+    <!-- TOP BAR GLOBAL -->
+    <header
+      class="sticky top-0 z-50 w-full border-b border-gray-200 bg-white shadow-sm"
+    >
+      <div
+        class="mx-auto flex max-w-7xl items-center justify-between px-4 py-3 sm:px-6 lg:px-8"
+      >
+        <!-- Esquerda: Logo/Título -->
+        <div class="flex items-center gap-3">
+          <div
+            class="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-prumo-600 text-white shadow-md shadow-prumo-600/20"
+          >
+            <svg
+              class="h-5 w-5"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+              />
+            </svg>
+          </div>
+          <h1
+            class="text-sm font-bold tracking-tight text-gray-900 sm:text-base hidden sm:block"
+          >
+            Prumo Context Orchestrator
+          </h1>
+        </div>
+
+        <!-- Centro: Seletor Global de Projeto -->
+        <div class="flex flex-1 justify-center px-4">
+          <div class="w-full max-w-xs">
+            <label for="global-project" class="sr-only">Projeto Global</label>
+            <div class="relative">
+              <select
+                id="global-project"
+                name="project_id"
+                class="block w-full appearance-none rounded-md border border-gray-300 bg-gray-50 py-1.5 pl-3 pr-10 text-sm font-medium text-gray-700 focus:border-prumo-500 focus:outline-none focus:ring-1 focus:ring-prumo-500"
+                onchange="syncGlobalProject(this.value)"
+              >
+                {% if projects %} {% for proj in projects %}
+                <option value="{{ proj.id }}">{{ proj.name }}</option>
+                {% endfor %} {% else %}
+                <option value="" disabled selected>
+                  Nenhum projeto encontrado
+                </option>
+                {% endif %}
+              </select>
+              <div
+                class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-500"
+              >
+                <svg
+                  class="h-4 w-4"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    d="M19 9l-7 7-7-7"
+                  ></path>
+                </svg>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Direita: Indicadores de Saúde + Contadores -->
+        <div class="flex items-center gap-2 sm:gap-3 text-xs font-medium">
+          <!-- Contador: Documentos na Base -->
+          <div
+            class="flex items-center gap-1.5 rounded-full border border-prumo-200 bg-prumo-50 px-2.5 py-1 text-prumo-700"
+          >
+            <svg
+              class="h-3 w-3"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+              />
+            </svg>
+            <span class="hidden sm:inline"
+              >Docs: <strong>{{ doc_count }}</strong></span
+            >
+            <span class="sm:hidden"><strong>{{ doc_count }}</strong> D</span>
+          </div>
+          <!-- Contador: Entidades no Grafo -->
+          <div
+            class="flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-emerald-700"
+          >
+            <svg
+              class="h-3 w-3"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M13 10V3L4 14h7v7l9-11h-7z"
+              />
+            </svg>
+            <span class="hidden sm:inline"
+              >Entidades: <strong>{{ node_count }}</strong></span
+            >
+            <span class="sm:hidden"><strong>{{ node_count }}</strong> E</span>
+          </div>
+          <!-- Circuit Breaker -->
+          <div
+            class="flex items-center gap-1.5 rounded-full border border-gray-200 bg-gray-50 px-2.5 py-1 text-gray-600"
+          >
+            <span class="flex h-2 w-2 rounded-full bg-emerald-500"></span>
+            <span class="hidden sm:inline">Circuit: CLOSED</span>
+            <span class="sm:hidden">CB</span>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <div
+      class="mx-auto w-full max-w-4xl px-4 py-8 sm:px-6 lg:px-10 xl:max-w-5xl xl:px-12"
+    >
+      <div class="mb-6" role="tablist" aria-label="Etapas do Prumo">
         <div
-          class="flex rounded-xl border border-gray-200 bg-white p-1 shadow-sm"
+          class="flex flex-col sm:flex-row rounded-xl border border-gray-200 bg-white p-1 shadow-sm gap-1 sm:gap-0"
         >
+          <!-- Aba 1 -->
           <button
             type="button"
             role="tab"
@@ -105,9 +259,11 @@
             aria-selected="true"
             aria-controls="panel-ingest"
             data-tab="ingest"
-            class="tab-btn flex-1 rounded-lg px-4 py-2.5 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 aria-selected:bg-prumo-600 aria-selected:text-white aria-selected:shadow-sm"
+            class="tab-btn flex-1 rounded-lg px-4 py-2.5 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-100 aria-selected:bg-prumo-600 aria-selected:text-white aria-selected:shadow-sm"
           >
-            <span class="flex items-center justify-center gap-2">
+            <span
+              class="flex items-center justify-center gap-2 whitespace-nowrap"
+            >
               <svg
                 class="h-4 w-4"
                 fill="none"
@@ -121,9 +277,11 @@
                   d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
                 />
               </svg>
-              1. Ingerir documento
+              1. Ingestão de Contexto
             </span>
           </button>
+
+          <!-- Aba 2 -->
           <button
             type="button"
             role="tab"
@@ -131,9 +289,11 @@
             aria-selected="false"
             aria-controls="panel-query"
             data-tab="query"
-            class="tab-btn flex-1 rounded-lg px-4 py-2.5 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 aria-selected:bg-emerald-600 aria-selected:text-white aria-selected:shadow-sm"
+            class="tab-btn flex-1 rounded-lg px-4 py-2.5 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-100 aria-selected:bg-emerald-600 aria-selected:text-white aria-selected:shadow-sm"
           >
-            <span class="flex items-center justify-center gap-2">
+            <span
+              class="flex items-center justify-center gap-2 whitespace-nowrap"
+            >
               <svg
                 class="h-4 w-4"
                 fill="none"
@@ -147,21 +307,83 @@
                   d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
                 />
               </svg>
-              2. Consultar base
+              2. Consultar Grafo
+            </span>
+          </button>
+
+          <!-- Aba 3 -->
+          <button
+            type="button"
+            role="tab"
+            id="tab-prompts"
+            aria-selected="false"
+            aria-controls="panel-prompts"
+            data-tab="prompts"
+            class="tab-btn relative flex-1 rounded-lg px-4 py-2.5 text-sm font-medium text-violet-600 transition-colors hover:bg-violet-50 aria-selected:bg-violet-500 aria-selected:text-white aria-selected:shadow-sm"
+          >
+            <div class="absolute -top-2 -right-2">
+              <span
+                class="flex h-4 w-4 items-center justify-center rounded-full bg-amber-400 text-[10px] font-bold text-amber-900 border border-white"
+                >!</span
+              >
+            </div>
+            <span
+              class="flex items-center justify-center gap-2 whitespace-nowrap"
+            >
+              <svg
+                class="h-4 w-4"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"
+                ></path>
+              </svg>
+              3. Gerador de Prompts
+            </span>
+          </button>
+
+          <!-- Aba 4 -->
+          <button
+            type="button"
+            role="tab"
+            id="tab-data"
+            aria-selected="false"
+            aria-controls="panel-data"
+            data-tab="data"
+            class="tab-btn flex-1 rounded-lg px-4 py-2.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-100 aria-selected:bg-slate-700 aria-selected:text-white aria-selected:shadow-sm"
+          >
+            <span
+              class="flex items-center justify-center gap-2 whitespace-nowrap"
+            >
+              <svg 
+                class="h-4 w-4" 
+                fill="none" 
+                stroke="currentColor" 
+                viewBox="0 0 24 24"
+              >
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
+              </svg>
+              4. Gestão de Dados
             </span>
           </button>
         </div>
       </div>
 
-      <main>
+      <main class="mb-12">
+        <!-- ================= Aba 1: INGEST ================= -->
         <section
           id="panel-ingest"
           role="tabpanel"
           aria-labelledby="tab-ingest"
-          class="overflow-hidden rounded-2xl border border-gray-200/80 bg-surface-card shadow-card transition-all duration-200 hover:shadow-glow hover:border-prumo-200/80"
+          class="overflow-hidden rounded-2xl border border-gray-200/80 bg-surface-card shadow-sm transition-all duration-200 hover:shadow-glow hover:border-prumo-200/80 block"
         >
           <div
-            class="border-b border-gray-100 bg-gradient-to-r from-prumo-50/80 to-white px-6 py-5 sm:px-8 lg:px-10"
+            class="border-b border-gray-100 bg-gradient-to-r from-prumo-50/80 to-white px-6 py-5 sm:px-8"
           >
             <div class="flex items-center gap-3">
               <span
@@ -177,84 +399,63 @@
                     stroke-linecap="round"
                     stroke-linejoin="round"
                     stroke-width="2"
-                    d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
-                  />
+                    d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"
+                  ></path>
                 </svg>
               </span>
               <div>
                 <h2 class="text-lg font-semibold text-gray-900">
-                  Ingerir documento
+                  Ingestão de Contexto
                 </h2>
                 <p class="mt-0.5 text-sm text-gray-500">
-                  Cole o conteúdo abaixo ou anexe um arquivo (anotações de
-                  reunião, .txt, .md, etc.).
+                  Converta documentos em nós e arestas no Grafo e Regras de
+                  Negócio estruturadas.
                 </p>
               </div>
             </div>
           </div>
-          <div class="p-6 sm:p-8 lg:p-10">
+
+          <div class="p-6 sm:p-8">
             <form
               id="ingest-form"
               hx-post="/ui/ingest"
               hx-target="#ingest-status"
               hx-swap="innerHTML"
               hx-encoding="multipart/form-data"
-              class="space-y-5"
+              class="space-y-6"
             >
+              <!-- Hidden project input (synced via JS) -->
+              <input
+                type="hidden"
+                id="ingest-project-id"
+                name="project_id"
+                value=""
+              />
               <input type="hidden" name="source_type" value="manual_test" />
-
-              <div>
-                <label
-                  for="ingest-project"
-                  class="block text-sm font-medium text-gray-700"
-                >
-                  Projeto
-                </label>
-                {% if projects %}
-                <select
-                  id="ingest-project"
-                  name="project_id"
-                  required
-                  class="mt-1.5 block w-full rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 text-gray-900 transition-colors focus:border-prumo-500 focus:outline-none focus:ring-2 focus:ring-prumo-500/20 sm:text-sm"
-                >
-                  {% for proj in projects %}
-                  <option value="{{ proj.id }}">{{ proj.name }}</option>
-                  {% endfor %}
-                </select>
-                {% else %}
-                <p
-                  class="mt-1.5 rounded-lg bg-yellow-50 px-3 py-2 text-sm text-yellow-800"
-                >
-                  Nenhum projeto disponível. Reinicie a aplicação para criar o
-                  projeto padrão.
-                </p>
-                {% endif %}
-              </div>
 
               <div>
                 <label
                   for="ingest-title"
                   class="block text-sm font-medium text-gray-700"
+                  >Título</label
                 >
-                  Título
-                </label>
                 <input
                   id="ingest-title"
                   type="text"
                   name="title"
-                  class="mt-1.5 block w-full rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 text-gray-900 placeholder-gray-400 transition-colors focus:border-prumo-500 focus:outline-none focus:ring-2 focus:ring-prumo-500/20 sm:text-sm"
+                  class="mt-1.5 block w-full rounded-md border border-gray-300 bg-white px-3.5 py-2 text-gray-900 placeholder-gray-400 focus:border-prumo-500 focus:outline-none focus:ring-1 focus:ring-prumo-500/50 sm:text-sm shadow-sm"
                   placeholder="Ex.: Ata da reunião 24/02 — ou deixe em branco ao anexar arquivo"
                 />
               </div>
 
+              <!-- Drag & Drop -->
               <div>
-                <label class="block text-sm font-medium text-gray-700 mb-1.5">
-                  Anexar arquivos
-                </label>
+                <label class="block text-sm font-medium text-gray-700 mb-1.5"
+                  >Anexar arquivos</label
+                >
                 <div
                   id="drop-zone"
                   class="drop-zone flex min-h-[100px] cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-gray-300 bg-gray-50/80 px-4 py-6 text-center transition-colors hover:border-prumo-300 hover:bg-prumo-50/50"
-                  role="button"
                   tabindex="0"
                 >
                   <input
@@ -282,8 +483,7 @@
                     Arraste um ou mais arquivos aqui ou clique para escolher
                   </p>
                   <p class="mt-0.5 text-xs text-gray-400">
-                    .txt, .md, .csv, .json, .pdf — anotações de reunião, RFCs,
-                    etc.
+                    PDFs, DOCX, TXT, MD, YAML, etc.
                   </p>
                   <p
                     id="file-name"
@@ -292,43 +492,116 @@
                 </div>
               </div>
 
+              <!-- Textarea -->
               <div>
                 <label
                   for="ingest-content"
-                  class="block text-sm font-medium text-gray-700"
+                  class="block text-sm font-medium text-gray-700 mb-1.5"
+                  >Ou cole o conteúdo aqui</label
                 >
-                  Ou cole o conteúdo aqui
-                </label>
                 <textarea
                   id="ingest-content"
                   name="content"
-                  rows="5"
-                  class="mt-1.5 block w-full resize-y rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 text-gray-900 placeholder-gray-400 transition-colors focus:border-prumo-500 focus:outline-none focus:ring-2 focus:ring-prumo-500/20 sm:text-sm"
+                  rows="4"
+                  class="block w-full resize-y rounded-md border border-gray-300 bg-white px-3.5 py-2 text-gray-900 placeholder-gray-400 focus:border-prumo-500 focus:outline-none focus:ring-1 focus:ring-prumo-500/50 sm:text-sm shadow-sm font-mono text-sm leading-relaxed"
                   placeholder="Paste RFC, notes, or code here..."
                 ></textarea>
               </div>
 
-              <div class="flex flex-wrap items-center gap-3 pt-1">
+              <!-- Toggle Modo -->
+              <div
+                class="flex items-center justify-between border-t border-gray-100 pt-4"
+              >
+                <div class="flex items-center gap-4">
+                  <span class="text-sm font-medium text-gray-700"
+                    >Extrair:</span
+                  >
+                  <div class="flex items-center gap-6">
+                    <label class="flex items-center gap-2 cursor-pointer group">
+                      <input
+                        type="radio"
+                        name="ingest_mode"
+                        value="rag"
+                        class="h-4 w-4 text-prumo-600 focus:ring-prumo-500 border-gray-300"
+                        checked
+                      />
+                      <span
+                        class="text-sm text-gray-600 group-hover:text-gray-900"
+                        >Documento Geral (RAG)</span
+                      >
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer group">
+                      <input
+                        type="radio"
+                        name="ingest_mode"
+                        value="business"
+                        class="h-4 w-4 text-prumo-600 focus:ring-prumo-500 border-gray-300"
+                      />
+                      <span
+                        class="text-sm text-gray-600 group-hover:text-gray-900"
+                        >Regras de Negócio</span
+                      >
+                    </label>
+                  </div>
+                </div>
+
                 <button
                   type="submit"
-                  class="inline-flex items-center justify-center rounded-lg bg-prumo-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-prumo-700 focus:outline-none focus:ring-2 focus:ring-prumo-500 focus:ring-offset-2"
+                  class="inline-flex items-center justify-center rounded-md bg-prumo-600 px-5 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-prumo-700 focus:outline-none focus:ring-2 focus:ring-prumo-500 focus:ring-offset-2"
                 >
-                  Enviar e processar
+                  <svg
+                    class="mr-2 h-4 w-4"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="2"
+                      d="M13 10V3L4 14h7v7l9-11h-7z"
+                    />
+                  </svg>
+                  Iniciar Extração via Gemini
                 </button>
               </div>
             </form>
-            <div id="ingest-status" class="mt-4 min-h-[1.5rem]"></div>
+
+            <!-- Terminal Log Simulator -->
+            <div id="ingest-status-container" class="mt-6 hidden">
+              <div
+                class="rounded-t-lg bg-gray-800 px-4 py-2 flex items-center gap-2"
+              >
+                <div class="flex gap-1.5">
+                  <div class="h-2.5 w-2.5 rounded-full bg-red-500"></div>
+                  <div class="h-2.5 w-2.5 rounded-full bg-amber-500"></div>
+                  <div class="h-2.5 w-2.5 rounded-full bg-green-500"></div>
+                </div>
+                <span class="text-xs text-gray-400 font-mono ml-2"
+                  >Extrator_Pipeline</span
+                >
+              </div>
+              <div
+                class="bg-gray-900 rounded-b-lg p-4 h-32 overflow-y-auto font-mono text-xs shadow-inner"
+              >
+                <div
+                  id="ingest-status"
+                  class="text-green-400 leading-relaxed whitespace-pre-wrap"
+                ></div>
+              </div>
+            </div>
           </div>
         </section>
 
+        <!-- ================= Aba 2: QUERY ================= -->
         <section
           id="panel-query"
           role="tabpanel"
           aria-labelledby="tab-query"
-          class="mt-8 hidden overflow-hidden rounded-2xl border border-gray-200/80 bg-surface-card shadow-card transition-all duration-200 hover:shadow-glow hover:border-emerald-200/80"
+          class="hidden overflow-hidden rounded-2xl border border-gray-200/80 bg-surface-card shadow-sm transition-all duration-200 hover:shadow-glow hover:border-emerald-200/80"
         >
           <div
-            class="border-b border-gray-100 bg-gradient-to-r from-emerald-50/80 to-white px-6 py-5 sm:px-8 lg:px-10"
+            class="border-b border-gray-100 bg-gradient-to-r from-emerald-50/80 to-white px-6 py-5 sm:px-8"
           >
             <div class="flex items-center gap-3">
               <span
@@ -344,111 +617,428 @@
                     stroke-linecap="round"
                     stroke-linejoin="round"
                     stroke-width="2"
-                    d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                  />
+                    d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                  ></path>
                 </svg>
               </span>
               <div>
                 <h2 class="text-lg font-semibold text-gray-900">
-                  Consultar base de conhecimento
+                  Consultar Grafo
                 </h2>
                 <p class="mt-0.5 text-sm text-gray-500">
-                  Faça perguntas sobre os documentos já ingeridos.
+                  Recupere informações usando Local, Global ou Hybrid Graph-RAG.
                 </p>
               </div>
             </div>
           </div>
-          <div class="p-6 sm:p-8 lg:p-10">
+
+          <div class="p-6 sm:p-8">
             <form
               hx-post="/ui/query"
               hx-target="#qa-result"
               hx-swap="innerHTML"
-              class="space-y-5"
+              class="space-y-6"
             >
+              <input
+                type="hidden"
+                id="query-project-id"
+                name="project_id"
+                value=""
+              />
+
+              <!-- Seletor Modo de Consulta (Radios) -->
               <div>
-                <label
-                  for="query-project"
-                  class="block text-sm font-medium text-gray-700"
-                >
-                  Projeto
-                </label>
-                {% if projects %}
-                <select
-                  id="query-project"
-                  name="project_id"
-                  required
-                  class="mt-1.5 block w-full rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 text-gray-900 transition-colors focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 sm:text-sm"
-                >
-                  {% for proj in projects %}
-                  <option value="{{ proj.id }}">{{ proj.name }}</option>
-                  {% endfor %}
-                </select>
-                {% else %}
-                <p
-                  class="mt-1.5 rounded-lg bg-yellow-50 px-3 py-2 text-sm text-yellow-800"
-                >
-                  Nenhum projeto disponível.
-                </p>
-                {% endif %}
+                <fieldset>
+                  <legend class="text-sm font-medium text-gray-700 mb-2">
+                    Modo de Resolução do Grafo (LightRAG Strategy)
+                  </legend>
+                  <div
+                    class="flex items-center gap-6 p-3 rounded-md bg-gray-50 border border-gray-200"
+                  >
+                    <label class="flex items-center gap-2 cursor-pointer group">
+                      <input
+                        type="radio"
+                        name="mode"
+                        value="hybrid"
+                        class="h-4 w-4 text-emerald-600 focus:ring-emerald-500 border-gray-300"
+                        checked
+                      />
+                      <span class="text-sm font-medium text-gray-700"
+                        >Hybrid (Recomendado)</span
+                      >
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer group">
+                      <input
+                        type="radio"
+                        name="mode"
+                        value="local"
+                        class="h-4 w-4 text-emerald-600 focus:ring-emerald-500 border-gray-300"
+                      />
+                      <span class="text-sm text-gray-600"
+                        >Local (Entidades)</span
+                      >
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer group">
+                      <input
+                        type="radio"
+                        name="mode"
+                        value="global"
+                        class="h-4 w-4 text-emerald-600 focus:ring-emerald-500 border-gray-300"
+                      />
+                      <span class="text-sm text-gray-600"
+                        >Global (Comunidades)</span
+                      >
+                    </label>
+                  </div>
+                </fieldset>
               </div>
 
               <div>
                 <label
                   for="query-question"
                   class="block text-sm font-medium text-gray-700"
+                  >Sua requisição ou pergunta</label
                 >
-                  Pergunta
-                </label>
-                <input
-                  id="query-question"
-                  type="text"
-                  name="question"
+                <div class="mt-1.5 flex rounded-md shadow-sm">
+                  <input
+                    id="query-question"
+                    type="text"
+                    name="question"
+                    required
+                    class="block w-full min-w-0 flex-1 rounded-none rounded-l-md border border-gray-300 bg-white px-3.5 py-2 text-gray-900 placeholder-gray-400 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 sm:text-sm"
+                    placeholder="Ex: Como funciona o sistema de circuit breaker?"
+                  />
+                  <button
+                    type="submit"
+                    class="inline-flex items-center gap-2 rounded-r-md border border-l-0 border-transparent bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2"
+                  >
+                    <svg
+                      class="h-4 w-4"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        stroke-width="2"
+                        d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                      ></path>
+                    </svg>
+                    Consultar
+                  </button>
+                </div>
+              </div>
+            </form>
+
+            <div id="qa-result" class="mt-6">
+              <!-- A resposta do servidor virá com um Header contendo o Confidence Badge (injeta-se via server template, mas o visual do card fica preparado aqui ou pelo partial) -->
+            </div>
+          </div>
+        </section>
+
+        <!-- ================= Aba 3: PROMPTS ================= -->
+        <section
+          id="panel-prompts"
+          role="tabpanel"
+          aria-labelledby="tab-prompts"
+          class="hidden overflow-hidden rounded-2xl border border-gray-200/80 bg-surface-card shadow-sm transition-all duration-200 hover:shadow-glow hover:border-violet-300/80"
+        >
+          <div
+            class="border-b border-gray-100 bg-gradient-to-r from-violet-50/80 to-white px-6 py-5 sm:px-8"
+          >
+            <div class="flex items-center gap-3">
+              <span
+                class="flex h-9 w-9 items-center justify-center rounded-lg bg-violet-100 text-violet-600"
+              >
+                <svg
+                  class="h-5 w-5"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"
+                  ></path>
+                </svg>
+              </span>
+              <div>
+                <h2 class="text-lg font-semibold text-gray-900">
+                  Gerador de Prompts (Cursor YAML)
+                </h2>
+                <p class="mt-0.5 text-sm text-gray-500">
+                  Sintetiza regras de negócio, esqueletos de código e contexto
+                  do Grafo em um YAML compatível.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div class="p-6 sm:p-8">
+            <form id="prompts-form" class="space-y-6">
+              <!-- Hidden project input (synced via JS) -->
+              <input
+                type="hidden"
+                id="prompts-project-id"
+                name="project_id"
+                value=""
+              />
+
+              <div>
+                <label
+                  for="prompts-intent"
+                  class="block text-sm font-medium text-gray-700"
+                  >Intent (O que o agente deve fazer?)</label
+                >
+                <textarea
+                  id="prompts-intent"
+                  name="intent"
+                  rows="3"
                   required
-                  class="mt-1.5 block w-full rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 text-gray-900 placeholder-gray-400 transition-colors focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 sm:text-sm"
-                  placeholder="Pergunte sobre os documentos ingeridos..."
-                />
+                  class="mt-1.5 block w-full resize-y rounded-md border border-gray-300 bg-white px-3.5 py-2 text-gray-900 placeholder-gray-400 focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500/50 sm:text-sm shadow-sm"
+                  placeholder="Ex: Refatorar o componente de Button do React para usar Tailwind e suportar variants..."
+                ></textarea>
               </div>
 
               <div>
                 <label
-                  for="query-mode"
+                  for="prompts-files"
                   class="block text-sm font-medium text-gray-700"
+                  >Target Files (Alvos - Separe por vírgula)</label
                 >
-                  Modo de busca
-                </label>
-                <select
-                  id="query-mode"
-                  name="mode"
-                  class="mt-1.5 block w-full rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 text-gray-900 transition-colors focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 sm:text-sm"
-                >
-                  <option value="local">Local — grafo de entidades</option>
-                  <option value="global">Global — comunidades</option>
-                  <option value="hybrid" selected>
-                    Hybrid — grafo + cache (recomendado)
-                  </option>
-                </select>
-                <p class="mt-1 text-xs text-gray-400">
-                  Escolha como o LightRAG deve combinar o grafo com o cache de
-                  documentos.
-                </p>
+                <input
+                  id="prompts-files"
+                  type="text"
+                  name="target_files"
+                  class="mt-1.5 block w-full rounded-md border border-gray-300 bg-white px-3.5 py-2 text-gray-900 placeholder-gray-400 focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500/50 sm:text-sm shadow-sm font-mono text-sm"
+                  placeholder="src/components/Button.tsx, src/types.ts"
+                />
               </div>
 
-              <div class="flex flex-wrap items-center gap-3 pt-1">
-                <button
-                  type="submit"
-                  class="inline-flex items-center justify-center rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2"
-                >
-                  Perguntar ao agente
-                </button>
+              <!-- Switches lado a lado -->
+              <div class="flex flex-col sm:flex-row gap-6 pt-2 pb-2">
+                <div class="flex items-center">
+                  <div
+                    class="relative inline-block w-10 mr-2 align-middle select-none transition duration-200 ease-in"
+                  >
+                    <input
+                      type="checkbox"
+                      name="include_skeletons"
+                      id="toggle-skeletons"
+                      class="toggle-checkbox absolute block w-5 h-5 rounded-full bg-white border-4 border-gray-300 appearance-none cursor-pointer z-10 top-0 left-0"
+                      checked
+                    />
+                    <label
+                      for="toggle-skeletons"
+                      class="toggle-label block overflow-hidden h-5 rounded-full bg-gray-300 cursor-pointer"
+                    ></label>
+                  </div>
+                  <label
+                    for="toggle-skeletons"
+                    class="text-sm text-gray-700 cursor-pointer font-medium"
+                    >Incluir Code Skeletons (Assinaturas)</label
+                  >
+                </div>
+
+                <div class="flex items-center">
+                  <div
+                    class="relative inline-block w-10 mr-2 align-middle select-none transition duration-200 ease-in"
+                  >
+                    <input
+                      type="checkbox"
+                      name="include_few_shot"
+                      id="toggle-fewshot"
+                      class="toggle-checkbox absolute block w-5 h-5 rounded-full bg-white border-4 border-gray-300 appearance-none cursor-pointer z-10 top-0 left-0"
+                      checked
+                    />
+                    <label
+                      for="toggle-fewshot"
+                      class="toggle-label block overflow-hidden h-5 rounded-full bg-gray-300 cursor-pointer"
+                    ></label>
+                  </div>
+                  <label
+                    for="toggle-fewshot"
+                    class="text-sm text-gray-700 cursor-pointer font-medium"
+                    >Incluir Few-Shot Examples (C_01/C_02)</label
+                  >
+                </div>
               </div>
+
+              <button
+                type="button"
+                id="btn-generate-prompt"
+                class="w-full inline-flex items-center justify-center rounded-md bg-violet-600 px-5 py-3 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-violet-700 focus:outline-none focus:ring-2 focus:ring-violet-500 focus:ring-offset-2"
+              >
+                <svg
+                  class="mr-2 h-5 w-5"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z"
+                  ></path>
+                </svg>
+                Sintetizar Prompt YAML via Generative Model
+              </button>
             </form>
-            <div id="qa-result" class="mt-6 min-h-[2rem]"></div>
+
+            <div id="prompts-result-container" class="mt-8 hidden">
+              <div class="flex items-center justify-between mb-2">
+                <span
+                  class="text-sm font-semibold text-gray-700"
+                  id="prompt-badge-status"
+                ></span>
+                <div class="flex gap-2">
+                  <button
+                    type="button"
+                    onclick="copyToClipboard()"
+                    class="text-xs text-violet-600 hover:text-violet-800 font-medium px-2 py-1 bg-violet-50 rounded border border-violet-100 shadow-sm transition-colors"
+                  >
+                    Copiar Clipboard
+                  </button>
+                  <a
+                    href="#"
+                    id="download-yaml-link"
+                    class="text-xs text-gray-600 hover:text-gray-900 font-medium px-2 py-1 bg-gray-50 rounded border border-gray-200 shadow-sm transition-colors"
+                    target="_blank"
+                    download="cursor_prompt.yaml"
+                    >Download Arquivo</a
+                  >
+                </div>
+              </div>
+              <div
+                class="relative rounded-lg overflow-hidden border border-gray-800 bg-[#1e1e1e] shadow-inner"
+              >
+                <div
+                  class="bg-[#2d2d2d] border-b border-gray-700 px-4 py-2 flex items-center gap-2"
+                >
+                  <span class="text-xs text-gray-400 font-mono"
+                    >cursor_prompt.yaml</span
+                  >
+                </div>
+                <pre
+                  class="p-4 overflow-x-auto text-sm text-gray-300 font-mono max-h-96 leading-relaxed"
+                ><code id="prompts-yaml-output"></code></pre>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ================= Aba 4: DADOS ================= -->
+        <section
+          id="panel-data"
+          role="tabpanel"
+          aria-labelledby="tab-data"
+          class="hidden overflow-hidden rounded-2xl border border-gray-200/80 bg-surface-card shadow-sm transition-all duration-200 hover:shadow-glow hover:border-slate-200/80"
+        >
+          <div
+            class="border-b border-gray-100 bg-gradient-to-r from-slate-50/80 to-white px-6 py-5 sm:px-8"
+          >
+            <div class="flex items-center gap-3">
+              <span
+                class="flex h-9 w-9 items-center justify-center rounded-lg bg-slate-100 text-slate-600"
+              >
+                <svg
+                  class="h-5 w-5"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
+                </svg>
+              </span>
+              <div>
+                <h2 class="text-lg font-semibold text-gray-900">
+                  Gestão de Dados do Projeto
+                </h2>
+                <p class="mt-0.5 text-sm text-gray-500">
+                  Gerencie documentos, reconstrua grafos e aplique expurgos irreversíveis.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div class="p-6 sm:p-8 space-y-8">
+            <div class="flex gap-4">
+              <button
+                type="button"
+                class="flex items-center gap-2 rounded bg-slate-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-500"
+                hx-delete="/knowledge/purge-all"
+                hx-confirm="Tem certeza que deseja apagar as entidades do GRAFO? Os documentos serão REPROCESSADOS."
+                hx-on::after-request="if(event.detail.successful) location.reload()"
+                hx-on::config-request="event.detail.path = '/knowledge/purge-all?project_id=' + document.getElementById('global-project').value"
+              >
+                <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                Reset Graph Entities
+              </button>
+
+              <button
+                type="button"
+                class="flex items-center gap-2 rounded bg-red-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-red-500"
+                hx-delete="/knowledge/purge-all"
+                hx-confirm="Tem certeza que deseja apagar TUDO deste projeto (Documentos e Grafo)? Esta ação é IRREVERSÍVEL."
+                hx-on::after-request="if(event.detail.successful) location.reload()"
+                hx-on::config-request="event.detail.path = '/knowledge/purge-all?project_id=' + document.getElementById('global-project').value + '&keep_documents=false'"
+              >
+                <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                Nuke Project Data
+              </button>
+            </div>
+
+            <div class="overflow-x-auto rounded-lg border border-gray-200">
+              <table class="min-w-full divide-y divide-gray-200 text-sm">
+                <thead class="bg-gray-50">
+                  <tr>
+                    <th scope="col" class="px-4 py-3 text-left font-semibold text-gray-900">Documento</th>
+                    <th scope="col" class="px-4 py-3 text-left font-semibold text-gray-900">Tipo</th>
+                    <th scope="col" class="px-4 py-3 text-left font-semibold text-gray-900">Status</th>
+                    <th scope="col" class="px-4 py-3 text-right font-semibold text-gray-900">Ações</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-200 bg-white" id="docs-table-body">
+                  {% for doc in recent_docs %}
+                  <tr class="hover:bg-gray-50 transition-colors">
+                    <td class="whitespace-nowrap px-4 py-3 font-medium text-gray-900">{{ doc.title }}</td>
+                    <td class="whitespace-nowrap px-4 py-3 text-gray-500">{{ doc.source_type }}</td>
+                    <td class="whitespace-nowrap px-4 py-3">
+                      <span class="inline-flex items-center rounded-md bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-600/20">{{ doc.status }}</span>
+                    </td>
+                    <td class="whitespace-nowrap px-4 py-3 text-right">
+                      <button
+                        type="button"
+                        class="text-red-500 hover:text-red-700 transition-colors"
+                        hx-delete="/knowledge/documents/{{ doc.id }}"
+                        hx-target="closest tr"
+                        hx-swap="outerHTML swap:1s"
+                        hx-confirm="Remover este documento e entidades derivadas?"
+                        title="Delete Document"
+                      >
+                        <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                      </button>
+                    </td>
+                  </tr>
+                  {% else %}
+                  <tr>
+                    <td colspan="4" class="px-4 py-8 text-center text-gray-500">Nenhum documento encontrado.</td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
           </div>
         </section>
       </main>
     </div>
 
     <script>
+      // 1. Controle Tabs
       (function () {
         var tabButtons = document.querySelectorAll(".tab-btn");
         var panels = document.querySelectorAll('[role="tabpanel"]');
@@ -460,6 +1050,7 @@
           panels.forEach(function (panel) {
             var show = panel.id === "panel-" + activeTabId;
             panel.classList.toggle("hidden", !show);
+            panel.classList.toggle("block", show);
           });
         }
         tabButtons.forEach(function (btn) {
@@ -474,6 +1065,23 @@
           });
         });
       })();
+
+      // 2. Global Project Sync
+      function syncGlobalProject(projectId) {
+        if (!projectId) return;
+        document.getElementById("ingest-project-id").value = projectId;
+        document.getElementById("query-project-id").value = projectId;
+        document.getElementById("prompts-project-id").value = projectId;
+      }
+      // Inicializar
+      window.addEventListener("DOMContentLoaded", () => {
+        const globalSelect = document.getElementById("global-project");
+        if (globalSelect && globalSelect.value) {
+          syncGlobalProject(globalSelect.value);
+        }
+      });
+
+      // 3. Ingest Drop & HTMX intercept
       (function () {
         var dropZone = document.getElementById("drop-zone");
         var fileInput = document.getElementById("ingest-file");
@@ -483,13 +1091,12 @@
         if (!dropZone || !fileInput) return;
 
         function showFile(name) {
-          fileNameEl.textContent = "Arquivo: " + name;
+          fileNameEl.textContent = "Arquivo selecionado: " + name;
           fileNameEl.classList.remove("hidden");
           if (!titleInput.value.trim())
             titleInput.placeholder =
               "Título (opcional — será usado o nome do arquivo)";
         }
-
         function clearFile() {
           fileInput.value = "";
           fileNameEl.classList.add("hidden");
@@ -501,12 +1108,10 @@
         dropZone.addEventListener("click", function () {
           fileInput.click();
         });
-
         fileInput.addEventListener("change", function () {
           if (this.files && this.files.length) showFile(this.files[0].name);
           else clearFile();
         });
-
         dropZone.addEventListener("dragover", function (e) {
           e.preventDefault();
           dropZone.classList.add("drag-over");
@@ -524,13 +1129,106 @@
           }
         });
 
-        dropZone.addEventListener("keydown", function (e) {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            fileInput.click();
+        // Show terminal when form submitted
+        document
+          .getElementById("ingest-form")
+          .addEventListener("htmx:beforeRequest", function () {
+            const container = document.getElementById(
+              "ingest-status-container",
+            );
+            container.classList.remove("hidden");
+            document.getElementById("ingest-status").innerHTML =
+              "Initializing job...\nUploading payload...\nStatus: PENDING...";
+          });
+      })();
+
+      // 4. Prompts Generator Logic (Fetch API instead of HTMX since we handle JSON)
+      document
+        .getElementById("btn-generate-prompt")
+        .addEventListener("click", async () => {
+          const projId = document.getElementById("prompts-project-id").value;
+          const intent = document.getElementById("prompts-intent").value;
+          if (!projId || !intent) {
+            alert("Projeto e Intent são obrigatórios.");
+            return;
+          }
+
+          const filesRaw = document.getElementById("prompts-files").value;
+          const target_files = filesRaw
+            ? filesRaw
+                .split(",")
+                .map((s) => s.trim())
+                .filter(Boolean)
+            : [];
+          const includeSkeletons =
+            document.getElementById("toggle-skeletons").checked;
+          const includeFewShot =
+            document.getElementById("toggle-fewshot").checked;
+
+          const payload = {
+            project_id: projId,
+            intent: intent,
+            target_files: target_files,
+            include_skeletons: includeSkeletons,
+            include_few_shot: includeFewShot,
+            extra_prohibited: [],
+            extra_required: [],
+          };
+
+          const btn = document.getElementById("btn-generate-prompt");
+          const container = document.getElementById("prompts-result-container");
+          const outputCode = document.getElementById("prompts-yaml-output");
+          const badge = document.getElementById("prompt-badge-status");
+          const link = document.getElementById("download-yaml-link");
+
+          btn.disabled = true;
+          btn.innerHTML = `<svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Sintetizando no Gemini...`;
+
+          try {
+            const resp = await fetch("/prompts/generate-cursor-yaml", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+            });
+
+            if (!resp.ok) {
+              const err = await resp.text();
+              alert(`Erro na geração: ${err}`);
+              return;
+            }
+
+            const data = await resp.json();
+
+            outputCode.textContent = data.yaml_prompt;
+
+            // Badge colors
+            let color =
+              data.confidence === "HIGH"
+                ? "text-green-700 bg-green-100"
+                : data.confidence === "MEDIUM"
+                  ? "text-amber-700 bg-amber-100"
+                  : "text-red-700 bg-red-100";
+            badge.innerHTML = `<span class="px-2 py-0.5 rounded-full ${color} text-xs uppercase tracking-wide">Confiança: ${data.confidence} | Tier: ${data.tier}</span>`;
+
+            // Set download link parameters
+            link.href = `/prompts/${data.prompt_id}?project_id=${projId}`;
+
+            container.classList.remove("hidden");
+          } catch (e) {
+            alert("Erro de rede: " + e);
+          } finally {
+            btn.disabled = false;
+            btn.innerHTML = `<svg class="mr-2 h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z"></path></svg> Sintetizar Prompt YAML via Generative Model`;
           }
         });
-      })();
+
+      function copyToClipboard() {
+        const text = document.getElementById("prompts-yaml-output").textContent;
+        navigator.clipboard.writeText(text).then(() => {
+          // just flash a quick alert or toast (simple alert for now)
+          alert("YAML copiado para o clipboard!");
+        });
+      }
     </script>
   </body>
 </html>

@@ -86,15 +86,14 @@ async def _get_query_embedding(question: str) -> list[float]:
     """Get embedding for the query string."""
     return await asyncio.to_thread(_embed_query_sync, question)
 
+
 # Circuit Breaker State per Project
 _circuit_breaker_failures: dict[UUID, int] = {}
 _circuit_breaker_tests: dict[UUID, int] = {}
 _HALF_OPEN_INTERVAL = 5
 
 
-async def _check_graph_health(
-    session: AsyncSession, project_id: UUID
-) -> bool:
+async def _check_graph_health(session: AsyncSession, project_id: UUID) -> bool:
     """Calculates invalid edge percentage. True if healthy, False if breaker open."""
     stmt = text("""
         SELECT
@@ -103,16 +102,16 @@ async def _check_graph_health(
         FROM graph_edges
         WHERE project_id = :project_id
     """)
-    
+
     res = await session.execute(stmt, {"project_id": str(project_id)})
     row = res.first()
     if not row or row[0] == 0:
         return True
-        
-    total = row[0]
-    invalid = row[1] or 0
-    ratio = invalid / total
-    
+
+    total = int(row[0])
+    invalid = int(row[1] or 0)
+    ratio = float(invalid) / float(total)
+
     return ratio < settings.graph_invalid_threshold
 
 
@@ -122,12 +121,17 @@ async def _circuit_breaker_allow_request(
     """True se circuito fechado (permite), False se aberto (força fallback)."""
     if ignore_health:
         return True
-        
-    is_open = project_id in _circuit_breaker_failures and _circuit_breaker_failures[project_id] >= 1
-    
+
+    is_open = (
+        project_id in _circuit_breaker_failures
+        and _circuit_breaker_failures[project_id] >= 1
+    )
+
     if is_open:
         # Mecanismo meia-abertura
-        _circuit_breaker_tests[project_id] = _circuit_breaker_tests.get(project_id, 0) + 1
+        _circuit_breaker_tests[project_id] = (
+            _circuit_breaker_tests.get(project_id, 0) + 1
+        )
         if _circuit_breaker_tests[project_id] >= _HALF_OPEN_INTERVAL:
             _circuit_breaker_tests[project_id] = 0
             healthy = await _check_graph_health(session, project_id)
@@ -136,12 +140,12 @@ async def _circuit_breaker_allow_request(
                 return True
             return False
         return False
-        
+
     healthy = await _check_graph_health(session, project_id)
     if not healthy:
         _circuit_breaker_failures[project_id] = 1
         return False
-        
+
     return True
 
 
@@ -306,12 +310,18 @@ async def local_query(
     ignore_health: bool = False,
 ) -> KnowledgeAnswer:
     """LOCAL query: embed → pgvector → CTE expand → synthesis."""
-    if not await _circuit_breaker_allow_request(session, project_id, ignore_health) and not force_graph:
+    allow_request = await _circuit_breaker_allow_request(
+        session, project_id, ignore_health
+    )
+    if not allow_request and not force_graph:
         logger.warning("circuit_breaker_open_fallback", project_id=str(project_id))
         answer = KnowledgeAnswer(
-            answer="Graph is currently unavailable due to integrity degradation. Using Phase 2 fallback.",
+            answer=(
+                "Graph is currently unavailable due to integrity degradation. "
+                "Using Phase 2 fallback."
+            ),
             confidence_level="LOW",
-            citations=[]
+            citations=[],
         )
         answer._warnings.append("circuit_breaker_open")
         return answer
@@ -350,12 +360,18 @@ async def global_query(
     ignore_health: bool = False,
 ) -> KnowledgeAnswer:
     """Execute a GLOBAL query: community summaries → synthesis."""
-    if not await _circuit_breaker_allow_request(session, project_id, ignore_health) and not force_graph:
+    allow_request = await _circuit_breaker_allow_request(
+        session, project_id, ignore_health
+    )
+    if not allow_request and not force_graph:
         logger.warning("circuit_breaker_open_fallback", project_id=str(project_id))
         answer = KnowledgeAnswer(
-            answer="Graph is currently unavailable due to integrity degradation. Using Phase 2 fallback.",
+            answer=(
+                "Graph is currently unavailable due to integrity degradation. "
+                "Using Phase 2 fallback."
+            ),
             confidence_level="LOW",
-            citations=[]
+            citations=[],
         )
         answer._warnings.append("circuit_breaker_open")
         return answer
@@ -371,7 +387,7 @@ async def global_query(
         .where(
             GraphNode.project_id == project_id,
             GraphNode.community_id.is_not(None),
-            GraphNode.is_valid == True,  # Filter by validity
+            GraphNode.is_valid,  # Filter by validity
         )
         .group_by(GraphNode.community_id)
     )
@@ -441,7 +457,11 @@ async def hybrid_query(
     if community structure is not yet available.
     """
     local_answer = await local_query(
-        session, project_id, question, force_graph=force_graph, ignore_health=ignore_health
+        session,
+        project_id,
+        question,
+        force_graph=force_graph,
+        ignore_health=ignore_health,
     )
 
     # If local confidence is sufficient, return immediately.
@@ -456,7 +476,11 @@ async def hybrid_query(
     # Escalate to global query.
     try:
         global_answer = await global_query(
-            session, project_id, question, force_graph=force_graph, ignore_health=ignore_health
+            session,
+            project_id,
+            question,
+            force_graph=force_graph,
+            ignore_health=ignore_health,
         )
     except Exception:  # noqa: BLE001
         logger.warning(

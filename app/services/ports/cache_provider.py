@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Protocol, TypeVar
-
+from typing import Protocol, TypeVar
 
 T = TypeVar("T")
 
@@ -48,4 +47,3 @@ class CacheProvider(Protocol):
         """
         Generate free-form text (e.g. YAML) with optional cached context.
         """
-

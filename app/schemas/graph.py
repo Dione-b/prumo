@@ -81,7 +81,7 @@ class EntityExtractionResult(BaseModel):
                 if r.source not in entity_names or r.target not in entity_names:
                     # Mutable assignment em modelo Pydantic frozen
                     updated_rel = r.model_copy()
-                    object.__setattr__(updated_rel, 'is_valid', False)
+                    object.__setattr__(updated_rel, "is_valid", False)
                     updated_relations.append(updated_rel)
                 else:
                     updated_relations.append(r)
