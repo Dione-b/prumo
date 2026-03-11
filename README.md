@@ -105,6 +105,44 @@ Three core constraints are enforced across every module:
 
 ---
 
+## 🧱 Hexagonal Architecture
+
+The codebase follows a ports-and-adapters layout so that **domain/application logic never depends on frameworks, ORMs or SDKs directly**:
+
+```mermaid
+flowchart TD
+  subgraph domain [Domain]
+    domainEntities["Entities & ValueObjects"]
+    domainPorts["Ports (UnitOfWork, LLMEnginePort, GraphClusteringPort, Repositories)"]
+    useCases["UseCases (IngestBusiness, IngestKnowledge, QueryKnowledge)"]
+  end
+
+  subgraph infra [Infrastructure]
+    uow["SQLAlchemyUnitOfWork"]
+    repos["SQLAlchemyRepositories"]
+    llmAdapters["ExternalAIEngineAdapter (Ollama/Gemini)"]
+    graphAdapter["RemoteGraphAdapter (GraphWorker ACL)"]
+  end
+
+  subgraph delivery [Delivery]
+    fastapiRouters["FastAPIRouters"]
+  end
+
+  fastapiRouters --> useCases
+  useCases --> domainPorts
+  domainPorts --> uow
+  domainPorts --> llmAdapters
+  domainPorts --> graphAdapter
+  uow --> repos
+```
+
+- **Domain (`app/domain`)**: entities/value objects + `UnitOfWork`, `BusinessRuleRepository`, `KnowledgeDocumentRepository`, `LLMEnginePort`, `KnowledgeQueryPort` etc.
+- **Application (`app/application`)**: use cases (`CreateProjectUseCase`, `IngestBusinessUseCase`, `IngestKnowledgeDocumentUseCase`, `QueryKnowledgeUseCase`) orquestram transações via `UnitOfWork` e chamam apenas ports.
+- **Infrastructure (`app/infrastructure`, `app/services`, `app/adapters`, `app/ports`)**: implementações concretas (SQLAlchemy, Ollama, Gemini, HTTP ACL do `graph_worker`) conectadas às ports.
+- **Delivery (`app/routers`)**: FastAPI routers apenas validam payloads, resolvem dependências e chamam use cases — nunca fazem `session.commit()` ou chamam SDKs diretamente (C_03).
+
+---
+
 ## 📁 Project Structure
 
 ```
