@@ -1,14 +1,16 @@
 import uuid
-from collections.abc import AsyncGenerator
-from unittest.mock import ANY, AsyncMock
 
 import httpx
 import pytest
-from pytest_mock import MockerFixture
+from fastapi import FastAPI
 
+from app.application.use_cases import (
+    IngestBusinessResult,
+    ProjectNotFoundError,
+)
+from app.composition import provide_ingest_business_use_case
+from app.domain.entities import BusinessRuleExtraction, BusinessRuleRecord
 from app.config import settings
-from app.models import Project
-from app.schemas.business_rule import BusinessRuleSchema
 
 
 @pytest.fixture()
@@ -27,25 +29,45 @@ def valid_payload() -> dict[str, str]:
     }
 
 
-@pytest.fixture()
-async def mock_gemini_extraction(
-    mocker: MockerFixture,
-) -> AsyncGenerator[AsyncMock, None]:
-    """Patch the gemini extraction service avoiding live LLM calls."""
-    extracted_data = BusinessRuleSchema(
+class FakeIngestBusinessUseCase:
+    def __init__(self, result: IngestBusinessResult | None = None) -> None:
+        self._result = result
+
+    async def execute(
+        self,
+        *,
+        project_id: uuid.UUID,
+        raw_text: str,
+        source: str | None,
+    ) -> IngestBusinessResult:
+        if self._result is None:
+            raise ProjectNotFoundError(f"Project {project_id} not found")
+        return self._result
+
+
+def _build_result(project_id: str) -> IngestBusinessResult:
+    extraction = BusinessRuleExtraction(
         client_name="Test Company",
         core_objective="Manage users",
-        technical_constraints=["Postgres"],
-        acceptance_criteria=["Users can log in"],
+        technical_constraints=("Postgres",),
+        acceptance_criteria=("Users can log in",),
         additional_notes="None",
         confidence_level="HIGH",
+        warnings=(),
     )
-    patched = mocker.patch(
-        "app.routers.ingest.LLMGateway.extract_business_rules",
-        return_value=extracted_data,
-        autospec=True,
+    record = BusinessRuleRecord(
+        id=uuid.uuid4(),
+        project_id=uuid.UUID(project_id),
+        raw_text="We need to build a system that manages users using Postgres.",
+        client_name=extraction.client_name,
+        core_objective=extraction.core_objective,
+        technical_constraints=extraction.technical_constraints,
+        acceptance_criteria=extraction.acceptance_criteria,
+        additional_notes=extraction.additional_notes,
+        confidence_level=extraction.confidence_level,
+        source="Meeting notes.txt",
     )
-    yield patched
+    return IngestBusinessResult(record=record, extraction=extraction)
 
 
 @pytest.mark.asyncio
@@ -83,59 +105,46 @@ async def test_ingest_business_invalid_project_id(
 
 @pytest.mark.asyncio
 async def test_ingest_business_project_not_found(
+    app: FastAPI,
     client: httpx.AsyncClient,
     valid_payload: dict[str, str],
     valid_api_key: str,
-    mock_db: AsyncMock,
 ) -> None:
-    # Arrange
-    # Service get_project returns None initially
-    mock_db.get.return_value = None
+    app.dependency_overrides[provide_ingest_business_use_case] = (
+        lambda: FakeIngestBusinessUseCase()
+    )
 
-    # Act
     res = await client.post(
         "/ingest/business",
         json=valid_payload,
         headers={"X-API-Key": valid_api_key},
     )
 
-    # Assert
     assert res.status_code == 404
     assert "not found" in res.json()["detail"]
+    app.dependency_overrides.clear()
 
 
 @pytest.mark.asyncio
 async def test_ingest_business_success(
+    app: FastAPI,
     client: httpx.AsyncClient,
     valid_payload: dict[str, str],
     valid_api_key: str,
-    mock_db: AsyncMock,
-    mock_gemini_extraction: AsyncMock,
 ) -> None:
-    # Arrange
-    # Simulate DB returning a valid Project entity
-    mock_project = Project(id=uuid.UUID(valid_payload["project_id"]), name="Test")
-    mock_db.get.return_value = mock_project
+    app.dependency_overrides[provide_ingest_business_use_case] = (
+        lambda: FakeIngestBusinessUseCase(_build_result(valid_payload["project_id"]))
+    )
 
-    # Act
     res = await client.post(
         "/ingest/business",
         json=valid_payload,
         headers={"X-API-Key": valid_api_key},
     )
 
-    # Assert
     assert res.status_code == 200
     data = res.json()
     assert data["saved_in_db"] is True
     assert data["data"]["client_name"] == "Test Company"
     assert "warnings" in data
-
-    # Ensure DB transaction occurred securely
-    mock_db.add.assert_called_once()
-    mock_db.commit.assert_awaited_once()
-    mock_gemini_extraction.assert_awaited_once_with(
-        ANY,
-        valid_payload["raw_text"],
-        ANY,
-    )
+    app.dependency_overrides.clear()

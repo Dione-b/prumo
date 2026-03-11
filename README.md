@@ -31,6 +31,7 @@ Three core constraints are enforced across every module:
 ### 1. Semantic Ingestion (Phase 1)
 
 - **Multi-File & Binary Streaming**: Synchronous batch ingestion for raw text, PDFs, and DOCX files. Heavy binaries stream directly to disk without memory spikes. Incorporates real-time `pypdf` extraction to handle latin-1 encoded PDF buffers reliably.
+- **Binary Graph-RAG**: PDFs and other binary documents now participate fully in Graph-RAG. Branch A extracts text via `pypdf`, and Branch B consumes that extracted text for entity/relation extraction — eliminating the previous "binary files are processed via File API only" limitation.
 - **Local Native Async Extraction**: Routes structured data extraction (Business Rules) to **Llama 3.2** via a local Ollama instance utilizing the **Ollama 2026 SDK** with Native Tool Calling and automated Pydantic schema conversion.
 - **Dynamic Thinking Detection**: The `LLMGateway` dynamically evaluates the configured `OLLAMA_BUSINESS_MODEL` against a whitelist of thinking-capable models (Qwen 3, DeepSeek) before injecting the `think` parameter — preventing 400 errors on non-thinking models like Llama 3.2.
 - **VRAM-Safe Orchestration**: A strict sequential orchestration uses a high-performance **Priority Scheduler** with **Aging** and worker-pool execution (`OLLAMA_WORKERS=2`). This replaces the global semaphore, preventing starvation of low-priority tasks while ensuring model isolation via aggressive offloading (`keep_alive=0`).
@@ -39,7 +40,8 @@ Three core constraints are enforced across every module:
 
 ### 2. Context Orchestration & RAG (Phase 2)
 
-- **Project Context Engine**: Enforces referential integrity by automatically bootstrapping default workspaces on app startup, completely eliminating hardcoded UUIDs.
+- **Lazy Project Creation**: The database starts empty — no bootstrap or hardcoded default projects. Users are guided through an onboarding modal on first access to create their project with a mandatory **stack** declaration (`python`, `rust`, `typescript`, `generic`).
+- **Stack-Aware Strategy Resolution**: Project `stack` is persisted in `config_json` and drives the `StrategyResolver` factory to select the appropriate prompt strategy at runtime. An explicit `VALID_STACKS` set ensures only recognized stacks are accepted, with `GenericStrategy` as a safe fallback.
 - **Hybrid Cache Routing**: Orchestrates context via an explicit → implicit → inline fallback chain. The `GeminiClient` wrapper handles `caches.create` for explicit caching and `cached_content` parameter for inference using the official `google-genai` SDK.
 - **Token-Aware Caching**: The `KnowledgeOrchestrator` counts tokens before caching — documents with ≥ 4096 tokens attempt explicit cache; below threshold, they are marked `READY_PARTIAL` for inline fallback.
 - **Async Processing Pipeline (C_02)**: All Gemini SDK calls (`count_tokens`, `caches.create`, `models.generate_content`, `files.upload`) run inside `asyncio.to_thread()` to keep the event loop non-blocking.
@@ -61,8 +63,13 @@ Three core constraints are enforced across every module:
 
 - **Synthesis Engine**: Uses **Gemini 2.5 Pro** via `asyncio.to_thread` (C_02) to synthesize context and assemble structured YAML prompts for downstream LLM agents.
 - **Tiered Strategy**: Classifies tasks as `SIMPLE` (entity-level context) or `COMPLEX` (community context + few-shot examples + code skeletons).
+- **Stack-Driven Prompt Strategies**: The `StrategyResolver` factory selects prompt composition rules based on the project's declared stack:
+  - `PrumoMetaStrategy` — Python/FastAPI conventions.
+  - `RustSorobanStrategy` — Soroban/Stellar smart contract patterns.
+  - `TypeScriptReactStrategy` — React/Next.js frontend conventions.
+  - `GenericStrategy` — Universal fallback for unknown stacks.
 - **Abstracted Storage (ADR-003)**: Fully decoupled from the file system via the `IOutputStorage` repository pattern.
-  - **Local Strategy**: Safe asychronous file I/O (C_02) with manual TTL cleaning.
+  - **Local Strategy**: Safe asynchronous file I/O (C_02) with manual TTL cleaning.
   - **Database Strategy**: Persistent storage in the `generated_prompts` table for containerized environments.
   - **Hybrid (Both)**: Writes to both backends for maximum redundancy.
 - **Opaque Identifiers**: Internal file paths are never exposed. Prompts are identified by UUIDs (`prompt_id`) and served via authenticated download endpoints.
@@ -73,7 +80,9 @@ Three core constraints are enforced across every module:
 
 ### 5. Developer Experience & Quality
 
-- **HTMX Playground**: A lightweight testing interface at `/ui/` for rapid prototyping with document ingestion, status polling, and knowledge queries.
+- **HTMX Playground**: A lightweight testing interface at `/ui/` for rapid prototyping with document ingestion, status polling, knowledge queries, and data management (purge/reset).
+- **Onboarding Modal**: When no projects exist, the UI renders a full-screen overlay guiding the user to create their first project with name, description, and stack — leveraging HTMX `json-enc` extension for seamless REST integration.
+- **Data Management (Aba 4)**: Dedicated UI tab for project data lifecycle — reset graph entities or nuke all project data (documents + graph) with confirmation dialogs and automatic page reload.
 - **Rigorous Standard**: 100% type-hinted (MyPy strict), linted (Ruff), and backed by a comprehensive test suite (pytest, pytest-mock).
 - **Production Hardened**: Built with `tenacity` for resilient Gemini API retries and `structlog` for structured token-usage observability.
 - **Dynamic Configuration**: All model identifiers are injected via `pydantic-settings` — zero hardcoded model strings. Switchable instantly via `.env`.
@@ -90,6 +99,7 @@ Three core constraints are enforced across every module:
 | **Local LLM**  | Ollama SDK (async) — Llama 3.2 (business rules) + Qwen3 (embeddings)                      |
 | **Storage**    | SQLAlchemy 2.0 + PostgreSQL + `pgvector` (HNSW)                                           |
 | **Graph**      | `igraph` + `leidenalg` (Leiden community detection)                                       |
+| **Frontend**   | HTMX 1.9 + Tailwind CSS (Playground UI)                                                   |
 | **Quality**    | `ruff` (linter), `mypy` (typing), `pytest` (tests)                                        |
 | **Infra**      | `uv` (env), `alembic` (migrations), `tenacity` (resilience), `structlog` (observability)  |
 
@@ -101,14 +111,22 @@ Three core constraints are enforced across every module:
 app/
 ├── config.py                           # Dynamic settings via pydantic-settings
 ├── database.py                         # AsyncSession factory + DI
-├── main.py                             # FastAPI app + lifespan bootstrap + routers
+├── main.py                             # FastAPI app + lifespan readiness check
 ├── core/
 │   └── exceptions.py                   # Domain exception hierarchy
+├── domain/
+│   └── strategies/                     # Stack-aware prompt strategy implementations
+│       ├── factory.py                  # StrategyResolver + VALID_STACKS registry
+│       ├── prompt_strategy.py          # IPromptStrategy Protocol
+│       ├── generic_strategy.py         # GenericStrategy (fallback)
+│       ├── prumo_meta_strategy.py      # PrumoMetaStrategy (Python/FastAPI)
+│       ├── rust_soroban_strategy.py    # RustSorobanStrategy (Soroban/Stellar)
+│       └── typescript_react_strategy.py # TypeScriptReactStrategy (React/Next)
 ├── models/
 │   ├── knowledge.py                    # KnowledgeDocument (File API + Cache + status)
-│   ├── graph.py                        # GraphNode (Vector 768d) + GraphEdge
+│   ├── graph.py                        # GraphNode (Vector 1024d) + GraphEdge
 │   ├── business_rule.py                # BusinessRule (extracted JSON)
-│   ├── project.py                      # Project workspace
+│   ├── project.py                      # Project workspace (config_json with stack)
 │   └── plan.py                         # Plan model
 ├── schemas/
 │   ├── knowledge.py                    # KnowledgeAnswer (C_01 validators), AnswerCitation, QueryMode
@@ -126,10 +144,11 @@ app/
 │   ├── gemini.py                      # Gemini extraction with tenacity retries
 │   ├── ollama_client.py               # VRAM-safe OllamaClient (Semaphore + keep_alive=0)
 │   ├── llm_gateway.py                 # LLMGateway (dynamic think detection, C_01)
-│   ├── knowledge_gemini.py            # Document pipeline (Branches A+B+C, File API)
+│   ├── knowledge_gemini.py            # Document pipeline (Branches A+B+C, binary Graph-RAG)
 │   ├── knowledge_orchestrator.py      # Query routing + batch ingestion + token-aware caching
 │   ├── document_processor.py          # VRAM-safe orchestrator (Extract → Embed)
 │   ├── graph_extractor.py             # Entity/relation extraction + graph upsert
+│   ├── graph_services.py             # Document deletion + project purge (cascade)
 │   ├── embedding_service.py           # Local Qwen3 batch embedding
 │   ├── community_detector.py          # Leiden algorithm + Gemini Flash summaries
 │   ├── graph_query_service.py         # Local / Global / Hybrid query engines
@@ -137,13 +156,13 @@ app/
 │   ├── file_classifier.py            # MIME-type gating for binary/text routing
 │   ├── sanitizer.py                   # LLM JSON sanitization + PDF extraction
 │   ├── business_rule.py               # Business rule persistence service
-│   └── project.py                     # Project management service
+│   └── project.py                     # Project management service (stack-aware creation)
 └── routers/
     ├── ingest.py                      # POST /ingest/business — multi-file uploads
-    ├── knowledge.py                   # /knowledge/documents, /knowledge/query
-    ├── projects.py                    # Project CRUD + bootstrap
+    ├── knowledge.py                   # /knowledge/documents, /knowledge/query, /knowledge/purge-all
+    ├── projects.py                    # POST /projects (stack validation + HX-Redirect)
     ├── prompts.py                     # POST /prompts/generate-cursor-yaml
-    └── test_ui.py                     # HTMX powered UI playground
+    └── test_ui.py                     # HTMX powered UI playground + onboarding modal
 ```
 
 ---
@@ -173,20 +192,19 @@ app/
 
     Required environment variables:
 
-    | Variable                 | Description                                             |
-    | ------------------------ | ------------------------------------------------------- |
-    | `GEMINI_API_KEY`         | Google AI Studio API key                                |
-    | `DATABASE_URL`           | PostgreSQL connection string (async)                    |
-    | `API_KEY`                | Static API key for endpoint auth                        |
-    | `GEMINI_SYNTHESIS_MODEL` | Synthesis model (default: `gemini-2.5-pro`)             |
-    | `GEMINI_FLASH_MODEL`     | Fast model (default: `gemini-2.5-flash`)                |
-    | `OLLAMA_BUSINESS_MODEL`  | Local extraction model (default: `llama3.2:3b`)         |
-    | `OLLAMA_EMBEDDING_MODEL` | Local embedding model (default: `qwen3-embedding:0.6b`) |
-
-| `PROMPT_STORAGE_BACKEND` | Storage strategy (`local`, `database`, `both`) |
-| `GRAPH_INVALID_THRESHOLD`| Max invalid edge ratio (default `0.3`) |
-| `OLLAMA_WORKERS` | Concurrent local workers (default `2`) |
-| `OLLAMA_REQUEST_TIMEOUT` | Max wait for model scheduling (default `300`) |
+    | Variable                  | Description                                             |
+    | ------------------------- | ------------------------------------------------------- |
+    | `GEMINI_API_KEY`          | Google AI Studio API key                                |
+    | `DATABASE_URL`            | PostgreSQL connection string (async)                    |
+    | `API_KEY`                 | Static API key for endpoint auth                        |
+    | `GEMINI_SYNTHESIS_MODEL`  | Synthesis model (default: `gemini-2.5-pro`)             |
+    | `GEMINI_FLASH_MODEL`      | Fast model (default: `gemini-2.5-flash`)                |
+    | `OLLAMA_BUSINESS_MODEL`   | Local extraction model (default: `llama3.2:3b`)         |
+    | `OLLAMA_EMBEDDING_MODEL`  | Local embedding model (default: `qwen3-embedding:0.6b`) |
+    | `PROMPT_STORAGE_BACKEND`  | Storage strategy (`local`, `database`, `both`)          |
+    | `GRAPH_INVALID_THRESHOLD` | Max invalid edge ratio (default `0.3`)                  |
+    | `OLLAMA_WORKERS`          | Concurrent local workers (default `2`)                  |
+    | `OLLAMA_REQUEST_TIMEOUT`  | Max wait for model scheduling (default `300`)           |
 
 3.  **Database Migration**:
 
@@ -201,6 +219,10 @@ app/
     ```
 
     Access the interactive docs at: [http://localhost:8000/docs](http://localhost:8000/docs)
+
+    Access the HTMX playground at: [http://localhost:8000/ui/](http://localhost:8000/ui/)
+
+    > On first access, the playground will present an onboarding modal to create your first project.
 
 ---
 
@@ -225,6 +247,16 @@ We maintain high standards through automated checks and comprehensive testing.
 
 ## 📖 API Reference
 
+### Project Creation
+
+```bash
+curl -X POST http://localhost:8000/projects \
+  -H 'Content-Type: application/json' \
+  -d '{"name": "My Project", "description": "A Soroban smart contract project", "stack": "rust"}'
+```
+
+Valid stacks: `generic`, `typescript`, `prumo`, `rust`.
+
 ### Business Rule Ingestion
 
 ```bash
@@ -244,6 +276,19 @@ curl -X POST 'http://localhost:8000/knowledge/query?project_id=...&question=...&
 
 # Global — community-level summaries
 curl -X POST 'http://localhost:8000/knowledge/query?project_id=...&question=...&mode=global'
+```
+
+### Data Management
+
+```bash
+# Purge graph entities only (documents remain, can be reprocessed)
+curl -X DELETE 'http://localhost:8000/knowledge/purge-all?project_id=...'
+
+# Nuke everything (documents + graph — irreversible)
+curl -X DELETE 'http://localhost:8000/knowledge/purge-all?project_id=...&keep_documents=false'
+
+# Delete a single document and its graph entities
+curl -X DELETE 'http://localhost:8000/knowledge/documents/<document_id>'
 ```
 
 ### Prompt Generation

@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     # Local Ingestion (Ollama)
     ollama_base_url: str = "http://localhost:11434"
     ollama_business_model: str = "llama3.2:3b"
+    ollama_graph_model: str = "minimax-m2:cloud"
     ollama_embedding_model: str = "qwen3-embedding:0.6b"
     ollama_embedding_dim: int = 1024  # Standard for Qwen3-0.6b
     ollama_workers: int = 2

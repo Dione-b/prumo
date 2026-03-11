@@ -2,17 +2,20 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 
 class ExtractedEntity(BaseModel):
     """Single entity extracted by the LLM from a text chunk."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
 
     name: str = Field(..., min_length=1, max_length=255)
     entity_type: str = Field(
         ...,
+        validation_alias=AliasChoices(
+            "entity_type", "Entity_Type", "type", "entityType"
+        ),
         min_length=1,
         max_length=50,
         description="Category of the entity (e.g. 'CONCEPT', 'PROTOCOL', 'LIBRARY').",
@@ -28,12 +31,15 @@ class ExtractedEntity(BaseModel):
 class ExtractedRelation(BaseModel):
     """Directed relation between two extracted entities."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
 
     source: str = Field(..., min_length=1, description="Name of the source entity.")
     target: str = Field(..., min_length=1, description="Name of the target entity.")
     relation_type: str = Field(
         ...,
+        validation_alias=AliasChoices(
+            "relation_type", "Relation_Type", "type", "relationType"
+        ),
         min_length=1,
         max_length=100,
         description="Verb or phrase describing the relationship.",

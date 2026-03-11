@@ -11,7 +11,11 @@ from pydantic import BaseModel, ValidationError
 
 from app.config import settings
 from app.services.ollama_client import OllamaClient
-from app.services.sanitizer import extract_pdf_if_needed, sanitize_llm_json
+from app.services.sanitizer import (
+    extract_pdf_if_needed,
+    normalize_keys,
+    sanitize_llm_json,
+)
 from app.utils.tool_converter import pydantic_to_tool
 
 logger = structlog.get_logger()
@@ -214,3 +218,114 @@ class LLMGateway:
                 f"Fallback generation after 3 failures: {latest_error}"
             )
         return fallback
+
+    async def extract_graph_entities(
+        self, text: str, schema: type[T], system_prompt: str
+    ) -> T:
+        """Gateway for Graph RAG extraction using agentic models (MiniMax/Soroban)."""
+        text = extract_pdf_if_needed(text)
+
+        # 200k token truncation for M2
+        enc = tiktoken.get_encoding("cl100k_base")
+        tokens = enc.encode(text)
+        max_tokens = 200_000
+        if len(tokens) > max_tokens:
+            text = enc.decode(tokens[:max_tokens])
+
+        client = self.ollama_client
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": text},
+        ]
+
+        tools = [pydantic_to_tool(schema)]
+
+        failures = 0
+        latest_error: Exception | None = None
+
+        for attempt in range(1, 4):
+            try:
+                thinking_models = ["qwen3", "deepseek", "minimax"]
+                model_name = settings.ollama_graph_model.lower()
+                should_think = any(m in model_name for m in thinking_models)
+
+                response = await client.chat(
+                    model=settings.ollama_graph_model,
+                    messages=messages,
+                    tools=tools,
+                    think=should_think,
+                    options={"num_predict": 4096},
+                )
+
+                message = (
+                    response.message
+                    if hasattr(response, "message")
+                    else response.get("message", {})
+                )
+
+                tool_calls = getattr(
+                    message, "tool_calls", message.get("tool_calls", [])
+                )
+
+                if tool_calls and len(tool_calls) > 0:
+                    tool_call = tool_calls[0]
+                    if hasattr(tool_call, "function"):
+                        func_obj = tool_call.function
+                        arguments = getattr(func_obj, "arguments", {})
+                    elif isinstance(tool_call, dict) and "function" in tool_call:
+                        arguments = tool_call["function"].get("arguments", {})
+                    else:
+                        arguments = {}
+
+                    if isinstance(arguments, str):
+                        try:
+                            parsed_data = json.loads(arguments)
+                        except json.JSONDecodeError:
+                            parsed_data = sanitize_llm_json(arguments)
+                    else:
+                        parsed_data = arguments
+                else:
+                    content = getattr(message, "content", message.get("content", ""))
+                    parsed_data = sanitize_llm_json(content)
+
+                # C_01: Normalize keys to lowercase to handle
+                # capitalization inconsistencies from LLMs
+                parsed_data = normalize_keys(parsed_data)
+
+                return schema(**parsed_data)
+            except TimeoutError as e:
+                logger.warning(
+                    "ollama_graph_timeout", timeout=settings.ollama_request_timeout
+                )
+                raise e
+            except (json.JSONDecodeError, ValidationError) as e:
+                failures += 1
+                latest_error = e
+                # C_01: Log the raw payload for observability and debugging
+                raw_payload = (
+                    arguments
+                    if "arguments" in locals() and arguments
+                    else getattr(message, "content", "")
+                )
+                logger.warning(
+                    "ollama_graph_extraction_failed",
+                    attempt=attempt,
+                    error=str(e),
+                    raw_payload=raw_payload,
+                )
+
+        logger.error("ollama_graph_extraction_exhausted", error=str(latest_error))
+
+        default_obj: dict[str, Any] = {}
+        for field_name, field_info in schema.model_fields.items():
+            if field_info.annotation is list or str(field_info.annotation).startswith(
+                "list"
+            ):
+                default_obj[field_name] = []
+            elif field_info.annotation is str:
+                default_obj[field_name] = ""
+            else:
+                default_obj[field_name] = None
+
+        return schema(**default_obj)

@@ -25,7 +25,6 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.database import async_session_maker
 from app.models.graph import GraphEdge, GraphNode
 from app.schemas.graph import EntityExtractionResult, ExtractedEntity, ExtractedRelation
 from app.services.document_processor import DocumentProcessor
@@ -52,19 +51,26 @@ class GraphExtractionReport:
 # Rate-limit pause between Flash calls — configurable via GEMINI_FLASH_DELAY_MS.
 _FLASH_RATE_LIMIT_SECONDS = settings.gemini_flash_delay_ms / 1000.0
 
-# Maximum characters per chunk sent to Flash for extraction.
-_MAX_CHUNK_SIZE = 8_000
+# Maximum characters per chunk sent for extraction.
+# Takes advantage of large context window models (e.g. MiniMax M2 200k tokens).
+_MAX_CHUNK_SIZE = 100_000
 
 _EXTRACTION_SYSTEM_INSTRUCTION = (
-    "You are a precise knowledge-graph extraction engine. "
+    "You are a precise, agentic knowledge-graph extraction engine, specialized "
+    "in Rust and Soroban smart contract architectures. "
     "Given a chunk of technical text, extract ALL named entities "
-    "(concepts, protocols, libraries, algorithms, data structures, people, "
+    "(concepts, protocols, functions, data structures, people, "
     "organizations) and ALL directed relations between them. "
+    "You have the capability of 'multi-file edits' perspective: use this broad "
+    "context to resolve and eliminate any contradictions before outputting. "
     "Each entity must have a concise but informative description. "
     "Each relation must specify source, target, relation_type (a verb phrase), "
     "description, and confidence (HIGH/MEDIUM/LOW). "
     "Output ONLY valid JSON matching the provided schema. "
-    "Do NOT invent entities not present in the text."
+    "CRITICAL: You must use EXACTLY the keys provided in the JSON schema. "
+    "Use 'entity_type', NOT 'Entity_Type'. "
+    "Do NOT invent entities not present in the text. "
+    "Prioritize accuracy and conceptual consistency in your extractions."
 )
 
 
@@ -266,99 +272,69 @@ async def upsert_graph_data(
     return len(node_name_to_id)
 
 
-async def safe_extract_and_upsert(
-    project_id: UUID,
-    document_id: UUID,
-    raw_content: str | None,
-    *,
-    is_binary: bool = False,
-) -> GraphExtractionReport:
-    """Resilient wrapper for the full graph extraction pipeline.
+async def remove_document_graph_data(session: AsyncSession, document_id: UUID) -> None:
+    """Remover os nós e arestas antigos de um documento (Swap de Reprocessamento).
 
-    Runs entity extraction + graph upsert inside a savepoint-protected
-    independent session. Catches any exception and returns a structured
-    report instead of propagating — this way a single document failure
-    never rolls back the entire batch.
-
-    Args:
-        project_id: The project owning the document.
-        document_id: The document being processed.
-        raw_content: Text content for entity extraction. None for binaries.
-        is_binary: If True, skip extraction (binary files have no text).
-
-    Returns:
-        GraphExtractionReport with success/failure details.
+    Removemos o document_id dos source_document_ids (JSONB Array) na tabela graph_edges.
+    Se a aresta não pertencer a mais nenhum documento, ela é deletada.
+    Em seguida, repetimos a operação para os graph_nodes.
     """
+    doc_id_str = str(document_id)
+    doc_id_json = f'["{doc_id_str}"]'
+
+    # 1. Update/Delete EDGES
+    await session.execute(
+        text(
+            """
+            WITH updated_edges AS (
+                UPDATE graph_edges
+                SET source_document_ids = source_document_ids - :doc_id_str
+                WHERE source_document_ids @> :doc_id_json
+                RETURNING id, source_document_ids
+            )
+            DELETE FROM graph_edges WHERE id IN (
+                SELECT id FROM updated_edges WHERE jsonb_array_length(source_document_ids) = 0
+            )
+            """
+        ),
+        {"doc_id_str": doc_id_str, "doc_id_json": doc_id_json},
+    )
+
+    # 2. Update/Delete NODES
+    await session.execute(
+        text(
+            """
+            WITH updated_nodes AS (
+                UPDATE graph_nodes
+                SET source_document_ids = source_document_ids - :doc_id_str
+                WHERE source_document_ids @> :doc_id_json
+                RETURNING id, source_document_ids
+            )
+            DELETE FROM graph_nodes WHERE id IN (
+                SELECT id FROM updated_nodes WHERE jsonb_array_length(source_document_ids) = 0
+            )
+            """
+        ),
+        {"doc_id_str": doc_id_str, "doc_id_json": doc_id_json},
+    )
+
+
+async def extract_graph_data(
+    raw_content: str | None,
+    is_binary: bool,
+) -> tuple[EntityExtractionResult | None, list[list[float]] | None, str | None]:
+    """Isola a Extração: Retorna (Extração, Embeddings, Reason) sem tocar no BD."""
     if is_binary:
-        return GraphExtractionReport(
-            document_id=document_id,
-            success=True,
-            skipped=True,
-            skip_reason="binary files are processed via File API only",
-        )
-
+        return None, None, "binary files are processed via File API only"
     if not raw_content:
-        return GraphExtractionReport(
-            document_id=document_id,
-            success=True,
-            skipped=True,
-            skip_reason="no raw_content available for extraction",
-        )
+        return None, None, "no raw_content available for extraction"
 
-    try:
-        processor = DocumentProcessor()
-        extraction, embeddings = await processor.process_document(raw_content)
+    processor = DocumentProcessor()
+    extraction, embeddings = await processor.process_document(
+        raw_content, _EXTRACTION_SYSTEM_INSTRUCTION
+    )
 
-        if not extraction.entities:
-            return GraphExtractionReport(
-                document_id=document_id,
-                success=True,
-                skipped=True,
-                skip_reason="no entities found in content",
-            )
+    if not extraction.entities:
+        return None, None, "no entities found in content"
 
-        async with async_session_maker() as db:
-            async with db.begin():
-                async with db.begin_nested():
-                    await upsert_graph_data(
-                        db, project_id, document_id, extraction, embeddings
-                    )
-
-        logger.info(
-            "safe_extract_complete",
-            document_id=str(document_id),
-            entities=len(extraction.entities),
-            relations=len(extraction.relations),
-        )
-
-        invalid_relations = sum(1 for r in extraction.relations if not r.is_valid)
-        confidence_downgrade = None
-
-        if invalid_relations > 0:
-            confidence_downgrade = "LOW"
-            logger.warning(
-                "graph_extraction_structural_degradation",
-                document_id=str(document_id),
-                invalid_relations=invalid_relations,
-                total_relations=len(extraction.relations),
-            )
-
-        return GraphExtractionReport(
-            document_id=document_id,
-            success=True,
-            entities_count=len(extraction.entities),
-            relations_count=len(extraction.relations),
-            confidence_downgrade=confidence_downgrade,
-        )
-
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "safe_extract_failed",
-            document_id=str(document_id),
-            error=str(exc),
-        )
-        return GraphExtractionReport(
-            document_id=document_id,
-            success=False,
-            error=str(exc),
-        )
+    return extraction, embeddings, None

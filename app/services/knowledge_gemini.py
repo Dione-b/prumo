@@ -35,7 +35,6 @@ from app.database import async_session_maker
 from app.models.knowledge import KnowledgeDocument
 from app.schemas.knowledge import KnowledgeAnswer
 from app.services.community_detector import fire_community_detection
-from app.services.graph_extractor import safe_extract_and_upsert
 
 logger = structlog.get_logger()
 client = genai.Client(api_key=settings.gemini_api_key.get_secret_value())
@@ -221,32 +220,65 @@ async def process_document_task(document_id: UUID) -> None:
             status=update_values.get("status", "READY"),
         )
 
-        # ── Branch B: Entity Extraction + Graph Upsert ──
-        # Delegates to safe_extract_and_upsert which owns its session,
-        # catches exceptions, and returns a structured report.
+        # ── Branch B: Entity Extraction + Graph Upsert (Atomic Swap) ──
+        from app.services.graph_extractor import (
+            extract_graph_data,
+            remove_document_graph_data,
+            upsert_graph_data,
+        )
 
         # Gating: force entity extraction if we have raw_content (even for PDFs).
         extraction_is_binary = is_binary_upload if not raw_content else False
 
-        graph_report = await safe_extract_and_upsert(
-            project_id=project_id,
-            document_id=document_id,
-            raw_content=raw_content,
-            is_binary=extraction_is_binary,
-        )
-        graph_success = graph_report.success
+        graph_success = False
+        reprocess_failed = False
+        reprocess_error_msg = ""
 
-        if graph_report.skipped:
-            logger.info(
-                "branch_b_skipped",
-                document_id=str(document_id),
-                reason=graph_report.skip_reason,
+        # 1. Extração Isolada e Validação Prévia Pydantic
+        try:
+            extraction, embeddings, skip_reason = await extract_graph_data(
+                raw_content=raw_content, is_binary=extraction_is_binary
             )
-        elif not graph_report.success:
-            logger.warning(
-                "branch_b_failed",
+
+            if skip_reason:
+                logger.info(
+                    "branch_b_skipped",
+                    document_id=str(document_id),
+                    reason=skip_reason,
+                )
+                graph_success = True
+            elif extraction:
+                # 3. Transação de Troca (Swap)
+                async with async_session_maker() as extraction_db:
+                    async with extraction_db.begin():
+                        # Deletar dados antigos do document_id
+                        await remove_document_graph_data(extraction_db, document_id)
+                        # Inserir novos dados validados
+                        await upsert_graph_data(
+                            extraction_db,
+                            project_id,
+                            document_id,
+                            extraction,
+                            embeddings,
+                        )
+
+                graph_success = True
+                logger.info(
+                    "branch_b_complete",
+                    document_id=str(document_id),
+                    entities=len(extraction.entities),
+                    relations=len(extraction.relations),
+                )
+        except Exception as exc:  # noqa: BLE001
+            # 2. Validação falhou -> Dispara log e dados antigos ficam INTACTOS.
+            logger.error(
+                "branch_b_extraction_failed",
                 document_id=str(document_id),
-                error=graph_report.error,
+                error=str(exc),
+            )
+            reprocess_failed = True
+            reprocess_error_msg = (
+                f"Falha no Reprocessamento: Verifique os Logs ({str(exc)[:50]})"
             )
 
         # ── Branch C: Community Detection ──
@@ -273,16 +305,38 @@ async def process_document_task(document_id: UUID) -> None:
         if not graph_success or not community_detection_success:
             async with async_session_maker() as db:
                 async with db.begin():
+                    # Handle atomic reprocess fallback:
+                    # Se falhou na validação de uma re-extração, os dados antigos
+                    # não foram apagados graças ao Swap Atômico. Mantemos o READY
+                    # e só reportamos o erro no metadata. Se for primeira vez, READY_PARTIAL.
+                    final_status = "READY" if reprocess_failed else "READY_PARTIAL"
+
+                    # Merge metadata
+                    doc_result = await db.execute(
+                        select(KnowledgeDocument).where(
+                            KnowledgeDocument.id == document_id
+                        )
+                    )
+                    doc_current = doc_result.scalar_one()
+                    meta = doc_current.metadata_json or {}
+
+                    if reprocess_failed:
+                        meta["reprocess_error"] = reprocess_error_msg
+                    else:
+                        meta.pop("reprocess_error", None)
+
                     await db.execute(
                         update(KnowledgeDocument)
                         .where(KnowledgeDocument.id == document_id)
-                        .values(status="READY_PARTIAL"),
+                        .values(status=final_status, metadata_json=meta)
                     )
+
             logger.info(
-                "document_ready_partial",
+                "document_ready_partial_or_reprocess",
                 document_id=str(document_id),
                 graph_success=graph_success,
                 community_detection_success=community_detection_success,
+                reprocess_failed=reprocess_failed,
             )
         else:
             logger.info(

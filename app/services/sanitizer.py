@@ -26,6 +26,15 @@ def sanitize_llm_json(raw_text: str) -> dict[str, Any]:
         ) from e
 
 
+def normalize_keys(data: Any) -> Any:
+    """Recursively converts all dictionary keys to lowercase."""
+    if isinstance(data, dict):
+        return {str(k).lower(): normalize_keys(v) for k, v in data.items()}
+    if isinstance(data, list):
+        return [normalize_keys(item) for item in data]
+    return data
+
+
 def extract_pdf_if_needed(raw_text: str) -> str:
     """Detect if the text is a latin-1 decoded PDF and extract text via PyPDF.
 

@@ -3,57 +3,88 @@ from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import get_db
-from app.models.knowledge import KnowledgeDocument
+from app.application.use_cases import (
+    DeleteKnowledgeDocumentUseCase,
+    GetKnowledgeDocumentStatusUseCase,
+    IngestKnowledgeDocumentUseCase,
+    KnowledgeDocumentNotFoundError,
+    PurgeProjectKnowledgeUseCase,
+    QueryKnowledgeUseCase,
+)
+from app.composition import (
+    provide_delete_knowledge_document_use_case,
+    provide_get_knowledge_document_status_use_case,
+    provide_ingest_knowledge_document_use_case,
+    provide_purge_project_knowledge_use_case,
+    provide_query_knowledge_use_case,
+)
+from app.domain.entities import KnowledgeAnswerResult
 from app.schemas.knowledge import (
+    AnswerCitation,
     CacheRefreshingResponse,
     DocumentIngestRequest,
     KnowledgeAnswer,
     QueryMode,
 )
-from app.services.knowledge_orchestrator import (
-    orchestrate_ingestion,
-    orchestrate_query,
-)
 
 router = APIRouter(prefix="/knowledge", tags=["Knowledge Base"])
+
+
+def _to_knowledge_answer(answer: KnowledgeAnswerResult) -> KnowledgeAnswer:
+    return KnowledgeAnswer(
+        answer=answer.answer,
+        confidence_level=answer.confidence_level,
+        citations=[
+            AnswerCitation(
+                document_id=citation.document_id,
+                snippet=citation.snippet,
+                source=citation.source,
+            )
+            for citation in answer.citations
+        ],
+    )
 
 
 @router.post("/documents", status_code=status.HTTP_202_ACCEPTED)
 async def ingest_document(
     request: DocumentIngestRequest,
-    background_tasks: BackgroundTasks,
-    db: AsyncSession = Depends(get_db),
+    use_case: IngestKnowledgeDocumentUseCase = Depends(
+        provide_ingest_knowledge_document_use_case
+    ),
 ) -> Any:
     """Ingest a knowledge document and trigger asynchronous cache processing."""
-    doc, is_existing = await orchestrate_ingestion(request, background_tasks, db)
-    if is_existing:
+    result = await use_case.execute(
+        project_id=request.project_id,
+        title=request.title,
+        content=request.content,
+        source_type=request.source_type,
+        metadata=request.metadata,
+    )
+    if result.is_existing:
         return JSONResponse(
             status_code=status.HTTP_200_OK,
             content={
-                "document_id": str(doc.id),
-                "status": doc.status,
+                "document_id": str(result.document.id),
+                "status": result.document.status,
                 "message": "Document already exists",
             },
         )
-    return {"document_id": str(doc.id), "status": "PROCESSING"}
+    return {"document_id": str(result.document.id), "status": "PROCESSING"}
 
 
 @router.get("/documents/{document_id}/status")
 async def get_document_status(
     document_id: UUID,
-    db: AsyncSession = Depends(get_db),
+    use_case: GetKnowledgeDocumentStatusUseCase = Depends(
+        provide_get_knowledge_document_status_use_case
+    ),
 ) -> Any:
     """Return the current processing status for a knowledge document."""
-    stmt = select(KnowledgeDocument).where(KnowledgeDocument.id == document_id)
-    result = await db.execute(stmt)
-    doc: KnowledgeDocument | None = result.scalar_one_or_none()
-
-    if not doc:
-        raise HTTPException(status_code=404, detail="Document not found")
+    try:
+        doc = await use_case.execute(document_id=document_id)
+    except KnowledgeDocumentNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     return {
         "document_id": str(doc.id),
@@ -74,7 +105,7 @@ async def query_knowledge(
     question: str,
     background_tasks: BackgroundTasks,
     mode: QueryMode = "hybrid",
-    db: AsyncSession = Depends(get_db),
+    use_case: QueryKnowledgeUseCase = Depends(provide_query_knowledge_use_case),
 ) -> Any:
     """Query the knowledge base for a project using cached document context.
 
@@ -83,8 +114,11 @@ async def query_knowledge(
     - 'global': Community summaries.
     - 'hybrid': Local → Global with confidence gating (default).
     """
-    result = await orchestrate_query(
-        project_id, question, background_tasks, db, mode=mode
+    del background_tasks
+    result = await use_case.execute(
+        project_id=project_id,
+        question=question,
+        mode=mode,
     )
 
     if result is None:
@@ -104,21 +138,21 @@ async def query_knowledge(
             content=result.model_dump(),
         )
 
-    return result
+    return _to_knowledge_answer(result)
 
 
 @router.delete("/documents/{document_id}")
 async def delete_document(
     document_id: UUID,
-    db: AsyncSession = Depends(get_db),
+    use_case: DeleteKnowledgeDocumentUseCase = Depends(
+        provide_delete_knowledge_document_use_case
+    ),
 ) -> Any:
     """Delete a document and related graph nodes."""
-    from app.services.graph_services import delete_knowledge_document
-
-    async with db.begin():
-        deleted = await delete_knowledge_document(db, document_id)
-        if not deleted:
-            raise HTTPException(status_code=404, detail="Document not found")
+    try:
+        await use_case.execute(document_id=document_id)
+    except KnowledgeDocumentNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     return JSONResponse(
         status_code=status.HTTP_200_OK,
@@ -130,13 +164,12 @@ async def delete_document(
 async def purge_project_data(
     project_id: UUID,
     keep_documents: bool = False,
-    db: AsyncSession = Depends(get_db),
+    use_case: PurgeProjectKnowledgeUseCase = Depends(
+        provide_purge_project_knowledge_use_case
+    ),
 ) -> Any:
     """Purge project graph, optionally purging documents as well."""
-    from app.services.graph_services import purge_project_knowledge
-
-    async with db.begin():
-        await purge_project_knowledge(db, project_id, keep_documents=keep_documents)
+    await use_case.execute(project_id=project_id, keep_documents=keep_documents)
 
     return JSONResponse(
         status_code=status.HTTP_200_OK,

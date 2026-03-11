@@ -1,19 +1,16 @@
 from fastapi import APIRouter, Depends, HTTPException, Security
 from fastapi.security import APIKeyHeader
 from pydantic import ValidationError
-from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.use_cases import IngestBusinessUseCase, ProjectNotFoundError
+from app.composition import provide_ingest_business_use_case
 from app.config import settings
-from app.database import get_db
 from app.logger import get_logger
 from app.schemas.business_rule import (
     BusinessRuleSchema,
     IngestBusinessRequest,
     IngestBusinessResponse,
 )
-from app.services.business_rule import create_business_rule
-from app.services.llm_gateway import LLMGateway
-from app.services.project import get_project
 
 log = get_logger(__name__)
 
@@ -37,24 +34,26 @@ async def _verify_api_key(
 @router.post("/business", response_model=IngestBusinessResponse)
 async def ingest_business(
     payload: IngestBusinessRequest,
-    db: AsyncSession = Depends(get_db),
+    use_case: IngestBusinessUseCase = Depends(provide_ingest_business_use_case),
     _: str = Depends(_verify_api_key),
 ) -> IngestBusinessResponse:
     """Ingest raw meeting notes, extract structured data via Gemini, and persist."""
-    # 1. Verify project exists
-    project = await get_project(db, payload.project_id)
-    if not project:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Project {payload.project_id} not found",
-        )
-
-    # 2. Extract structured data via Ollama Native Async (C_02)
     try:
-        gateway = LLMGateway()
-        result = await gateway.extract_business_rules(
-            payload.raw_text, BusinessRuleSchema
+        result = await use_case.execute(
+            project_id=payload.project_id,
+            raw_text=payload.raw_text,
+            source=payload.source,
         )
+        extracted = BusinessRuleSchema(
+            client_name=result.extraction.client_name,
+            core_objective=result.extraction.core_objective,
+            technical_constraints=list(result.extraction.technical_constraints),
+            acceptance_criteria=list(result.extraction.acceptance_criteria),
+            additional_notes=result.extraction.additional_notes,
+            confidence_level=result.extraction.confidence_level,
+        )
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValidationError:
         raise HTTPException(
             status_code=422,
@@ -70,25 +69,16 @@ async def ingest_business(
             detail="Erro interno ao processar a requisição LLM. Tente novamente.",
         )
 
-    # 3. Persist
-    record = await create_business_rule(
-        db=db,
-        project_id=payload.project_id,
-        raw_text=payload.raw_text,
-        extracted_data=result,
-        source=payload.source,
-    )
-
     log.info(
         "business_rule_ingested",
-        record_id=str(record.id),
+        record_id=str(result.record.id),
         project_id=str(payload.project_id),
-        confidence=result.confidence_level,
+        confidence=extracted.confidence_level,
     )
 
     return IngestBusinessResponse(
-        record_id=str(record.id),
-        data=result,
-        warnings=result.warnings,
+        record_id=str(result.record.id),
+        data=extracted,
+        warnings=extracted.warnings,
         saved_in_db=True,
     )

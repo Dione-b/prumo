@@ -18,6 +18,7 @@ setup_logging()
 
 logger = structlog.get_logger()
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifecycle: check readiness before serving."""

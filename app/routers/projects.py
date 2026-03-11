@@ -2,11 +2,10 @@ import uuid
 
 from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import get_db
+from app.application.use_cases import CreateProjectUseCase
+from app.composition import provide_create_project_use_case
 from app.domain.strategies.factory import VALID_STACKS
-from app.services.project import create_project as create_project_svc
 
 router = APIRouter(prefix="/projects", tags=["Projects"])
 
@@ -44,11 +43,10 @@ async def create_project(
     request: Request,
     response: Response,
     payload: ProjectCreateRequest,
-    db: AsyncSession = Depends(get_db),
+    use_case: CreateProjectUseCase = Depends(provide_create_project_use_case),
 ) -> ProjectResponse:
     """Create a new project for context ingestion."""
-    record = await create_project_svc(
-        db=db,
+    record = await use_case.execute(
         name=payload.name,
         stack=payload.stack,
         description=payload.description,
