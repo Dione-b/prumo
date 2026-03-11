@@ -1,3 +1,19 @@
+# Copyright (C) 2026 Dione Bastos
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published
+# by the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+
 """PromptGeneratorService — generates structured YAML prompts for LLM agents.
 
 Combines project-specific business rules, knowledge graph context (local and
@@ -21,6 +37,7 @@ import yaml
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.adapters.remote_graph_adapter import RemoteGraphAdapter
 from app.domain.strategies.factory import StrategyResolver
 from app.domain.strategies.prompt_strategy import IPromptStrategy, StrategyPayload
 from app.interfaces.storage import IOutputStorage
@@ -32,10 +49,7 @@ from app.schemas.prompt_generator import (
     PromptStrategyConfig,
     PromptTier,
 )
-from app.services.graph_query_service import (
-    global_query,
-    local_query,
-)
+from app.services.graph_query_service import GraphQueryService
 
 logger = structlog.get_logger()
 
@@ -98,8 +112,15 @@ class PromptGeneratorService:
     calls are deferred to the individual query engines.
     """
 
-    def __init__(self, storage: IOutputStorage) -> None:
+    def __init__(
+        self,
+        storage: IOutputStorage,
+        graph_query_service: GraphQueryService | None = None,
+    ) -> None:
         self._storage = storage
+        self._graph_query_service = graph_query_service or GraphQueryService(
+            RemoteGraphAdapter()
+        )
 
     async def generate_prompt(
         self,
@@ -291,7 +312,11 @@ class PromptGeneratorService:
         appending 'graph_local_unavailable' to warnings.
         """
         try:
-            answer = await local_query(session, project_id, task_intent)
+            answer = await self._graph_query_service.local_query(
+                session,
+                project_id,
+                task_intent,
+            )
 
             if answer.confidence_level == "LOW" and not answer.citations:
                 warnings.append("graph_local_unavailable")
@@ -324,7 +349,11 @@ class PromptGeneratorService:
         Returns None if the global context is unavailable or low quality.
         """
         try:
-            answer = await global_query(session, project_id, task_intent)
+            answer = await self._graph_query_service.global_query(
+                session,
+                project_id,
+                task_intent,
+            )
 
             if answer.confidence_level == "LOW":
                 warnings.append("graph_global_unavailable")

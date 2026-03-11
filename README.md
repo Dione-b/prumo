@@ -51,7 +51,7 @@ Three core constraints are enforced across every module:
 
 - **Knowledge Graph Extraction**: Automatically extracts semantic entities and relations using **Gemini Flash**. Relations are verified for referential integrity and stored with validity flags.
 - **pgvector HNSW Index**: Entities are locally embedded using **Qwen3 (via Ollama)** and indexed via pgvector HNSW (`m=16`, `ef_construction=64`) for cosine similarity search.
-- **Community Detection**: Leiden algorithm discovers thematic clusters. Community summaries are generated via Gemini Flash.
+- **Community Detection**: thematic clustering is delegated to an isolated `graph_worker` microservice over HTTP. The core persists only `community_id` assignments and generates summaries via Gemini Flash.
 - **Circuit Breaker Health Check**: The `GraphQueryService` monitors graph health in real-time. If the percentage of invalid edges exceeds `GRAPH_INVALID_THRESHOLD` (default 0.3), the **Circuit Breaker opens**, forcing an automatic fallback to Phase 2 cache/semantic search to ensure reliable RAG output.
 - **Three Query Modes**:
   - `local` — Entity-level: pgvector similarity → recursive CTE edge traversal → Pro synthesis.
@@ -98,7 +98,7 @@ Three core constraints are enforced across every module:
 | **Cloud LLM**  | `google-genai` SDK — Gemini 2.5 Pro (synthesis) + Gemini 2.5 Flash (extraction/community) |
 | **Local LLM**  | Ollama SDK (async) — Llama 3.2 (business rules) + Qwen3 (embeddings)                      |
 | **Storage**    | SQLAlchemy 2.0 + PostgreSQL + `pgvector` (HNSW)                                           |
-| **Graph**      | `igraph` + `leidenalg` (Leiden community detection)                                       |
+| **Graph**      | Remote `graph_worker` (FastAPI) running `igraph` + `leidenalg` outside the core           |
 | **Frontend**   | HTMX 1.9 + Tailwind CSS (Playground UI)                                                   |
 | **Quality**    | `ruff` (linter), `mypy` (typing), `pytest` (tests)                                        |
 | **Infra**      | `uv` (env), `alembic` (migrations), `tenacity` (resilience), `structlog` (observability)  |
@@ -135,6 +135,10 @@ app/
 │   └── prompt_generator.py             # PromptTier, PromptStrategyConfig, GeneratedPrompt (C_01)
 ├── infrastructure/
 │   └── storage/                       # Storage adapters (Local, Database, Hybrid)
+├── ports/
+│   └── graph_port.py                  # GraphClusteringPort + clustering DTOs
+├── adapters/
+│   └── remote_graph_adapter.py        # HTTP ACL for the isolated graph worker
 ├── interfaces/
 │   └── storage.py                     # IOutputStorage Protocol (ADR-003)
 ├── utils/
@@ -150,8 +154,8 @@ app/
 │   ├── graph_extractor.py             # Entity/relation extraction + graph upsert
 │   ├── graph_services.py             # Document deletion + project purge (cascade)
 │   ├── embedding_service.py           # Local Qwen3 batch embedding
-│   ├── community_detector.py          # Leiden algorithm + Gemini Flash summaries
-│   ├── graph_query_service.py         # Local / Global / Hybrid query engines
+│   ├── community_detector.py          # Remote clustering orchestration + Gemini Flash summaries
+│   ├── graph_query_service.py         # Instantiable Local / Global / Hybrid query service
 │   ├── prompt_generator.py            # Tiered YAML prompt assembly engine
 │   ├── file_classifier.py            # MIME-type gating for binary/text routing
 │   ├── sanitizer.py                   # LLM JSON sanitization + PDF extraction
@@ -163,6 +167,11 @@ app/
     ├── projects.py                    # POST /projects (stack validation + HX-Redirect)
     ├── prompts.py                     # POST /prompts/generate-cursor-yaml
     └── test_ui.py                     # HTMX powered UI playground + onboarding modal
+
+graph_worker/
+├── pyproject.toml                     # Isolated worker dependencies (GPL libs stay here)
+├── main.py                            # Stateless clustering API
+└── Dockerfile                         # OS/process isolation boundary
 ```
 
 ---
@@ -173,8 +182,8 @@ app/
 
 - Python 3.11+ and [uv](https://github.com/astral-sh/uv).
 - PostgreSQL with `pgvector` (e.g., `pgvector/pgvector:pg16` Docker image).
-- System library `libigraph-dev` (for `leidenalg`).
 - Ollama running locally (port 11434) with models pulled: `llama3.2:3b`, `qwen3-embedding:0.6b`.
+- A separate `graph_worker` deployment for Leiden clustering.
 
 ### Installation
 

@@ -1,11 +1,33 @@
+# Copyright (C) 2026 Dione Bastos
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published
+# by the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+
 from __future__ import annotations
 
 from fastapi import BackgroundTasks
 
+from app.adapters.remote_graph_adapter import RemoteGraphAdapter
 from app.database import async_session_factory
-from app.domain.entities import AnswerCitation, KnowledgeAnswerResult, KnowledgeDocumentRecord, QueryMode
+from app.domain.entities import (
+    AnswerCitation,
+    KnowledgeAnswerResult,
+    KnowledgeDocumentRecord,
+    QueryMode,
+)
 from app.schemas.knowledge import KnowledgeAnswer
-from app.services.graph_query_service import global_query, hybrid_query, local_query
+from app.services.graph_query_service import GraphQueryService
 from app.services.knowledge_gemini import answer_question_with_cache, process_document_task
 
 
@@ -34,6 +56,9 @@ class BackgroundTaskDocumentScheduler:
 
 
 class LegacyKnowledgeQueryAdapter:
+    def __init__(self) -> None:
+        self._graph_query_service = GraphQueryService(RemoteGraphAdapter())
+
     async def query_graph(
         self,
         mode: QueryMode,
@@ -42,12 +67,18 @@ class LegacyKnowledgeQueryAdapter:
     ) -> KnowledgeAnswerResult:
         async with async_session_factory() as db:
             if mode == "local":
-                return _map_answer(await local_query(db, project_id, question))
-            return _map_answer(await global_query(db, project_id, question))
+                return _map_answer(
+                    await self._graph_query_service.local_query(db, project_id, question)
+                )
+            return _map_answer(
+                await self._graph_query_service.global_query(db, project_id, question)
+            )
 
     async def hybrid_query(self, project_id, question: str) -> KnowledgeAnswerResult:
         async with async_session_factory() as db:
-            return _map_answer(await hybrid_query(db, project_id, question))
+            return _map_answer(
+                await self._graph_query_service.hybrid_query(db, project_id, question)
+            )
 
     async def answer_with_cache(
         self,

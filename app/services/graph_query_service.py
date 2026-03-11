@@ -1,3 +1,19 @@
+# Copyright (C) 2026 Dione Bastos
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published
+# by the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+
 """Graph query engines: Local, Global, and Hybrid.
 
 Implements the three LightRAG query modes:
@@ -21,6 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.graph import EMBEDDING_DIMENSIONS, GraphNode
+from app.ports.graph_port import GraphClusteringPort
 from app.schemas.graph import CommunityInfo, EdgeContext, NodeContext
 from app.schemas.knowledge import AnswerCitation, KnowledgeAnswer
 
@@ -47,6 +64,61 @@ _SYNTHESIS_SYSTEM_INSTRUCTION = (
     "If the answer cannot be found in the context, you MUST state 'I don't know'. "
     "Output ONLY valid JSON matching the provided schema."
 )
+
+
+class GraphQueryService:
+    """Instantiable graph query service with injectable graph dependencies."""
+
+    def __init__(self, clustering_port: GraphClusteringPort | None = None) -> None:
+        self._clustering_port = clustering_port
+
+    async def local_query(
+        self,
+        session: AsyncSession,
+        project_id: UUID,
+        question: str,
+        force_graph: bool = False,
+        ignore_health: bool = False,
+    ) -> KnowledgeAnswer:
+        return await local_query(
+            session,
+            project_id,
+            question,
+            force_graph=force_graph,
+            ignore_health=ignore_health,
+        )
+
+    async def global_query(
+        self,
+        session: AsyncSession,
+        project_id: UUID,
+        question: str,
+        force_graph: bool = False,
+        ignore_health: bool = False,
+    ) -> KnowledgeAnswer:
+        return await global_query(
+            session,
+            project_id,
+            question,
+            force_graph=force_graph,
+            ignore_health=ignore_health,
+        )
+
+    async def hybrid_query(
+        self,
+        session: AsyncSession,
+        project_id: UUID,
+        question: str,
+        force_graph: bool = False,
+        ignore_health: bool = False,
+    ) -> KnowledgeAnswer:
+        return await hybrid_query(
+            session,
+            project_id,
+            question,
+            force_graph=force_graph,
+            ignore_health=ignore_health,
+        )
 
 
 def _embed_query_sync(query: str) -> list[float]:

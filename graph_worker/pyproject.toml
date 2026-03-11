@@ -1,0 +1,12 @@
+[project]
+name = "prumo-graph-worker"
+version = "0.1.0"
+description = "Isolated graph clustering worker for Prumo."
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.111.0",
+    "uvicorn[standard]>=0.29.0",
+    "pydantic>=2.7.0",
+    "leidenalg>=0.10.0",
+    "igraph>=0.11.0",
+]

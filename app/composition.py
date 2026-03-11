@@ -1,7 +1,24 @@
+# Copyright (C) 2026 Dione Bastos
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published
+# by the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+
 from __future__ import annotations
 
 from fastapi import BackgroundTasks
 
+from app.adapters.remote_graph_adapter import RemoteGraphAdapter
 from app.application.use_cases import (
     CreateProjectUseCase,
     DeleteBusinessRuleUseCase,
@@ -19,10 +36,19 @@ from app.infrastructure.knowledge_workflows import (
 )
 from app.infrastructure.llm_external import ExternalAIEngineAdapter
 from app.infrastructure.uow_sqlalchemy import SQLAlchemyUnitOfWork
+from app.services.graph_query_service import GraphQueryService
 
 
 def _build_uow() -> SQLAlchemyUnitOfWork:
     return SQLAlchemyUnitOfWork(async_session_factory)
+
+
+def provide_remote_graph_adapter() -> RemoteGraphAdapter:
+    return RemoteGraphAdapter()
+
+
+def provide_graph_query_service() -> GraphQueryService:
+    return GraphQueryService(provide_remote_graph_adapter())
 
 
 def provide_create_project_use_case() -> CreateProjectUseCase:

@@ -1,3 +1,19 @@
+# Copyright (C) 2026 Dione Bastos
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published
+# by the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -36,6 +52,17 @@ class Settings(BaseSettings):
         ge=0.0,
         le=1.0,
         description="Percentual de limites para invalidar circuit breaker no graphql.",
+    )
+    graph_worker_url: str = "http://localhost:8090"
+    graph_worker_timeout_seconds: float = Field(
+        10.0,
+        gt=0.0,
+        description="Timeout em segundos para chamadas ao graph worker remoto.",
+    )
+    graph_worker_max_retries: int = Field(
+        3,
+        ge=0,
+        description="Numero maximo de retries do adapter remoto de graph worker.",
     )
 
     # Local Ingestion (Ollama)
