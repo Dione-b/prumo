@@ -31,7 +31,6 @@ import asyncio
 from uuid import UUID
 
 import structlog
-from google import genai
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -40,10 +39,11 @@ from app.models.graph import EMBEDDING_DIMENSIONS, GraphNode
 from app.ports.graph_port import GraphClusteringPort
 from app.schemas.graph import CommunityInfo, EdgeContext, NodeContext
 from app.schemas.knowledge import AnswerCitation, KnowledgeAnswer
+from app.services.gemini_client import GeminiClient
 
 logger = structlog.get_logger()
 
-client = genai.Client(api_key=settings.gemini_api_key.get_secret_value())
+_gemini = GeminiClient()
 
 _EMBEDDING_MODEL = "models/text-embedding-004"
 _TASK_TYPE_QUERY = "RETRIEVAL_QUERY"
@@ -121,42 +121,21 @@ class GraphQueryService:
         )
 
 
-def _embed_query_sync(query: str) -> list[float]:
-    """Embed a query string synchronously — runs in thread."""
-    result = client.models.embed_content(
-        model=_EMBEDDING_MODEL,
-        contents=query,
-        config=genai.types.EmbedContentConfig(
-            task_type=_TASK_TYPE_QUERY,
-            output_dimensionality=EMBEDDING_DIMENSIONS,
-        ),
-    )
-    embeddings = getattr(result, "embeddings", None)
-    if not embeddings or not embeddings[0].values:
-        return []
-    return [float(v) for v in embeddings[0].values]
-
-
-def _synthesize_sync(context: str, question: str) -> KnowledgeAnswer:
-    """Run synthesis via Gemini Pro synchronously — runs in thread."""
-    prompt = f"GRAPH CONTEXT:\n{context}\n\nQUESTION:\n{question}"
-
-    response = client.models.generate_content(
-        model=settings.gemini_synthesis_model,
-        contents=prompt,
-        config=genai.types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=KnowledgeAnswer,
-            temperature=0.0,
-            system_instruction=_SYNTHESIS_SYSTEM_INSTRUCTION,
-        ),
-    )
-    return KnowledgeAnswer.model_validate_json(str(response.text))
-
-
 async def _get_query_embedding(question: str) -> list[float]:
-    """Get embedding for the query string."""
-    return await asyncio.to_thread(_embed_query_sync, question)
+    """Get embedding for the query string via GeminiClient."""
+    return await _gemini.embed(question)
+
+
+async def _synthesize(context: str, question: str) -> KnowledgeAnswer:
+    """Run synthesis via Gemini Pro."""
+    prompt = f"GRAPH CONTEXT:\n{context}\n\nQUESTION:\n{question}"
+    return await _gemini.generate_structured(
+        prompt=prompt,
+        response_model=KnowledgeAnswer,
+        model=settings.gemini_synthesis_model,
+        system_instruction=_SYNTHESIS_SYSTEM_INSTRUCTION,
+        temperature=0.0,
+    )
 
 
 # Circuit Breaker State per Project
@@ -421,7 +400,7 @@ async def local_query(
         edges_expanded=len(edges),
     )
 
-    return await asyncio.to_thread(_synthesize_sync, context, question)
+    return await _synthesize(context, question)
 
 
 async def global_query(
@@ -499,7 +478,7 @@ async def global_query(
         communities_found=len(communities),
     )
 
-    answer = await asyncio.to_thread(_synthesize_sync, context, question)
+    answer = await _synthesize(context, question)
 
     # Enrich citations with community source info.
     if answer.citations:

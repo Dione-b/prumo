@@ -43,10 +43,10 @@ class DocumentProcessor:
     ) -> tuple[EntityExtractionResult, list[list[float]]]:
         """
         Linear pipeline to avoid hardware contention:
-        Step 1: Extract (Ollama/MiniMax via LLMGateway) -> Model Unloads.
-        Step 2: Embed (Qwen2.5) -> Model Unloads.
+        Step 1: Extract (Gemini Flash via LLMGateway) -> Model output.
+        Step 2: Embed (Gemini text-embedding-004).
         """
-        # Step 1: Extract (Ollama Graph Model)
+        # Step 1: Extract (Gemini Flash)
         logger.info("document_process_extraction_start")
         extracted = await self.llm_engine.extract_entities(
             raw_content,
@@ -75,7 +75,7 @@ class DocumentProcessor:
             ],
         )
 
-        # Step 2: Embed (Qwen2.5)
+        # Step 2: Embed (Gemini text-embedding-004)
         logger.info("document_process_embedding_start")
         texts_to_embed = [
             f"{entity.name}: {entity.description}" for entity in extraction.entities

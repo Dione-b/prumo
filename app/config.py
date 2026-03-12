@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     gemini_flash_model: str = "gemini-2.5-flash"
     gemini_temperature: float = 0.2
 
+    # Embedding
+    gemini_embedding_model: str = "text-embedding-004"
+    gemini_embedding_dim: int = 768
+
     # Caching
     gemini_cache_ttl: int = Field(
         3600, ge=60, description="TTL in seconds for explicit Gemini caches"
@@ -65,23 +69,6 @@ class Settings(BaseSettings):
         description="Numero maximo de retries do adapter remoto de graph worker.",
     )
 
-    # Local Ingestion (Ollama)
-    ollama_base_url: str = "http://localhost:11434"
-    ollama_business_model: str = "llama3.2:3b"
-    ollama_graph_model: str = "minimax-m2:cloud"
-    ollama_embedding_model: str = "qwen3-embedding:0.6b"
-    ollama_embedding_dim: int = 1024  # Standard for Qwen3-0.6b
-    ollama_workers: int = 2
-    ollama_max_concurrent: int = 1
-    ollama_keep_alive: int = Field(
-        0,
-        ge=0,
-        description="Seconds to keep model in VRAM after request (0 = offload)",
-    )
-    ollama_request_timeout: int = Field(
-        300, ge=10, description="Timeout in seconds for Ollama priority queue waiting"
-    )
-
     # Paths
     output_dir: str = "outputs"
 
@@ -89,3 +76,4 @@ class Settings(BaseSettings):
 
 
 settings = Settings()  # type: ignore[call-arg]
+

@@ -21,6 +21,7 @@ from contextlib import asynccontextmanager
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.infrastructure.conversation_repository import ConversationRepositorySQLAlchemy
 from app.infrastructure.repositories import (
     SQLAlchemyBusinessRuleRepository,
     SQLAlchemyKnowledgeDocumentRepository,
@@ -37,6 +38,7 @@ class SQLAlchemyUnitOfWork:
         self._projects: SQLAlchemyProjectRepository | None = None
         self._rules: SQLAlchemyBusinessRuleRepository | None = None
         self._knowledge_documents: SQLAlchemyKnowledgeDocumentRepository | None = None
+        self._conversations: ConversationRepositorySQLAlchemy | None = None
 
     @property
     def projects(self) -> SQLAlchemyProjectRepository:
@@ -56,6 +58,12 @@ class SQLAlchemyUnitOfWork:
             raise RuntimeError("UnitOfWork transaction is not active")
         return self._knowledge_documents
 
+    @property
+    def conversations(self) -> ConversationRepositorySQLAlchemy:
+        if self._conversations is None:
+            raise RuntimeError("UnitOfWork transaction is not active")
+        return self._conversations
+
     @asynccontextmanager
     async def transaction(self) -> AsyncIterator[SQLAlchemyUnitOfWork]:
         async with self._session_factory() as session:
@@ -70,8 +78,10 @@ class SQLAlchemyUnitOfWork:
         self._projects = SQLAlchemyProjectRepository(session)
         self._rules = SQLAlchemyBusinessRuleRepository(session)
         self._knowledge_documents = SQLAlchemyKnowledgeDocumentRepository(session)
+        self._conversations = ConversationRepositorySQLAlchemy(session)
 
     def _unbind_repositories(self) -> None:
         self._projects = None
         self._rules = None
         self._knowledge_documents = None
+        self._conversations = None

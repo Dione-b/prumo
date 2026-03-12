@@ -30,7 +30,6 @@ import asyncio
 from uuid import UUID
 
 import structlog
-from google import genai
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -39,10 +38,11 @@ from app.config import settings
 from app.database import async_session_maker
 from app.models.graph import GraphEdge, GraphNode
 from app.ports.graph_port import ClusterEdge, ClusterNode, GraphClusteringPort
+from app.services.gemini_client import GeminiClient
 
 logger = structlog.get_logger()
 
-client = genai.Client(api_key=settings.gemini_api_key.get_secret_value())
+_gemini = GeminiClient()
 
 # Minimum number of nodes required before community detection is useful.
 _MIN_NODES_FOR_COMMUNITY = 5
@@ -146,16 +146,13 @@ async def run_community_detection(
     return num_communities
 
 
-def _generate_summary_sync(entities_text: str) -> str:
-    """Generate a community summary via Flash — runs in thread."""
-    response = client.models.generate_content(
+async def _generate_summary(entities_text: str) -> str:
+    """Generate a community summary via Gemini Flash."""
+    return await _gemini.generate_text(
+        prompt=entities_text,
+        system_instruction=_COMMUNITY_SUMMARY_INSTRUCTION,
         model=settings.gemini_flash_model,
-        contents=entities_text,
-        config=genai.types.GenerateContentConfig(
-            system_instruction=_COMMUNITY_SUMMARY_INSTRUCTION,
-        ),
     )
-    return str(response.text).strip()
 
 
 async def generate_community_summaries(
@@ -194,7 +191,7 @@ async def generate_community_summaries(
         )
 
         try:
-            summary = await asyncio.to_thread(_generate_summary_sync, entities_text)
+            summary = await _generate_summary(entities_text)
             summaries[int(community_id)] = summary
         except Exception:  # noqa: BLE001
             logger.warning(

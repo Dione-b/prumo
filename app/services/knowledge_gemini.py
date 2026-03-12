@@ -51,9 +51,10 @@ from app.database import async_session_maker
 from app.models.knowledge import KnowledgeDocument
 from app.schemas.knowledge import KnowledgeAnswer
 from app.services.community_detector import fire_community_detection
+from app.services.gemini_client import GeminiClient
 
 logger = structlog.get_logger()
-client = genai.Client(api_key=settings.gemini_api_key.get_secret_value())
+_gemini = GeminiClient()
 
 MAX_POLL_SECONDS = 300
 POLL_INTERVAL = 2
@@ -68,8 +69,10 @@ def _upload_and_wait_for_active(
     """Upload a file and poll until it becomes ACTIVE.
 
     This function is synchronous by design and intended to run in a thread.
+    Uses GeminiClient's internal SDK client for File API operations.
     """
-    uploaded_file = client.files.upload(
+    sdk_client = _gemini._client  # noqa: SLF001
+    uploaded_file = sdk_client.files.upload(
         file=tmp_path,
         config=genai.types.UploadFileConfig(
             mime_type=mime_type,
@@ -86,7 +89,7 @@ def _upload_and_wait_for_active(
             raise TimeoutError(msg)
         time.sleep(POLL_INTERVAL)
         elapsed += POLL_INTERVAL
-        uploaded_file = client.files.get(name=str(uploaded_file.name))
+        uploaded_file = sdk_client.files.get(name=str(uploaded_file.name))
 
     if getattr(uploaded_file.state, "name", str(uploaded_file.state)) != "ACTIVE":
         msg = f"File upload failed. Final state: {uploaded_file.state}"
@@ -403,15 +406,12 @@ async def answer_question_with_cache(
     )
 
     if len(ready_docs) == 1 and ready_docs[0].gemini_cache_name is not None:
-        from app.services.gemini_client import GeminiClient
-
-        gemini_client = GeminiClient()
         logger.info(
             "qa_routing",
             strategy="cached_content",
             document_id=str(ready_docs[0].id),
         )
-        return await gemini_client.generate_with_cache(
+        return await _gemini.generate_with_cache(
             cache_name=ready_docs[0].gemini_cache_name,
             prompt=question,
             schema=KnowledgeAnswer,
@@ -433,23 +433,15 @@ async def answer_question_with_cache(
         text_docs=len(context_blocks),
     )
 
-    def sync_generate() -> KnowledgeAnswer:
-        response = client.models.generate_content(
-            model=settings.gemini_synthesis_model,
-            contents=prompt,
-            config=genai.types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=KnowledgeAnswer,
-                temperature=0.0,
-                system_instruction=system_instruction,
-            ),
-        )
-        # Ensure we pass str to model_validate_json
-        return KnowledgeAnswer.model_validate_json(str(response.text))
+    answer = await _gemini.generate_structured(
+        prompt=prompt,
+        response_model=KnowledgeAnswer,
+        model=settings.gemini_synthesis_model,
+        system_instruction=system_instruction,
+        temperature=0.0,
+    )
 
-    answer = await asyncio.to_thread(sync_generate)
-
-    # C_01: Enforce confidence downgrades if cache-routing fails
+    # Enforce confidence downgrades for inline (non-cached) context
     if answer.confidence_level == "HIGH":
         object.__setattr__(answer, "confidence_level", "MEDIUM")
 

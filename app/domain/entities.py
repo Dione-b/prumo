@@ -142,3 +142,33 @@ class KnowledgeAnswerResult:
     confidence_level: ConfidenceLevel
     citations: tuple[AnswerCitation, ...] = ()
     warnings: tuple[str, ...] = ()
+
+
+# ── Conversations ─────────────────────────────────────────────────────────
+
+MessageRole = Literal["user", "assistant"]
+
+
+@dataclass(frozen=True, slots=True)
+class MessageDraft:
+    role: MessageRole
+    content: str
+
+
+@dataclass(frozen=True, slots=True)
+class MessageRecord:
+    id: UUID
+    conversation_id: UUID
+    role: MessageRole
+    content: str
+    tokens_used: int | None
+    created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationRecord:
+    id: UUID
+    project_id: UUID
+    title: str
+    created_at: datetime
+    messages: tuple[MessageRecord, ...] = ()

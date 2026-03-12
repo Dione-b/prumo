@@ -20,6 +20,7 @@ from typing import AsyncContextManager, Protocol
 from uuid import UUID
 
 from app.domain.entities import (
+    ConversationRecord,
     KnowledgeAnswerResult,
     BusinessRuleDraft,
     BusinessRuleExtraction,
@@ -27,6 +28,8 @@ from app.domain.entities import (
     KnowledgeDocumentDraft,
     KnowledgeDocumentRecord,
     KnowledgeEntityExtraction,
+    MessageDraft,
+    MessageRecord,
     ProjectDraft,
     ProjectRecord,
     QueryMode,
@@ -69,6 +72,26 @@ class KnowledgeDocumentRepository(Protocol):
     async def purge_project(self, project_id: UUID, keep_documents: bool) -> None: ...
 
 
+class ConversationRepository(Protocol):
+    async def create(
+        self, project_id: UUID, title: str,
+    ) -> ConversationRecord: ...
+
+    async def add_message(
+        self, conversation_id: UUID, message: MessageDraft,
+    ) -> MessageRecord: ...
+
+    async def get_history(
+        self, conversation_id: UUID, limit: int = 20,
+    ) -> list[MessageRecord]: ...
+
+    async def list_by_project(
+        self, project_id: UUID,
+    ) -> list[ConversationRecord]: ...
+
+    async def delete(self, conversation_id: UUID) -> bool: ...
+
+
 class UnitOfWork(Protocol):
     @property
     def projects(self) -> ProjectRepository: ...
@@ -78,6 +101,9 @@ class UnitOfWork(Protocol):
 
     @property
     def knowledge_documents(self) -> KnowledgeDocumentRepository: ...
+
+    @property
+    def conversations(self) -> ConversationRepository: ...
 
     def transaction(self) -> AsyncContextManager["UnitOfWork"]: ...
 

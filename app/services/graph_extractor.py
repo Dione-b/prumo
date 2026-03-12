@@ -44,10 +44,9 @@ from app.config import settings
 from app.models.graph import GraphEdge, GraphNode
 from app.schemas.graph import EntityExtractionResult, ExtractedEntity, ExtractedRelation
 from app.services.document_processor import DocumentProcessor
+from app.services.gemini_client import GeminiClient
 
 logger = structlog.get_logger()
-
-client = genai.Client(api_key=settings.gemini_api_key.get_secret_value())
 
 
 @dataclass(frozen=True)
@@ -115,24 +114,18 @@ def _chunk_text(raw_content: str, max_size: int = _MAX_CHUNK_SIZE) -> list[str]:
     return chunks
 
 
-def _extract_from_chunk_sync(chunk: str) -> EntityExtractionResult:
-    """Synchronous Flash call — intended to run in a thread via asyncio.to_thread.
+_gemini_client = GeminiClient()
 
-    Honra C_03: instancia GenerativeModel por chamada, sem singleton,
-    porque cada thread precisa da sua própria instância.
-    """
-    response = client.models.generate_content(
+
+async def _extract_from_chunk(chunk: str) -> EntityExtractionResult:
+    """Extract entities from a text chunk using Gemini Flash."""
+    return await _gemini_client.generate_structured(
+        prompt=chunk,
+        response_model=EntityExtractionResult,
         model=settings.gemini_flash_model,
-        contents=chunk,
-        config=genai.types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=EntityExtractionResult,
-            temperature=0.0,
-            system_instruction=_EXTRACTION_SYSTEM_INSTRUCTION,
-        ),
+        system_instruction=_EXTRACTION_SYSTEM_INSTRUCTION,
+        temperature=0.0,
     )
-
-    return EntityExtractionResult.model_validate_json(str(response.text))
 
 
 async def extract_entities_from_chunks(
@@ -152,7 +145,7 @@ async def extract_entities_from_chunks(
             await asyncio.sleep(_FLASH_RATE_LIMIT_SECONDS)
 
         try:
-            result = await asyncio.to_thread(_extract_from_chunk_sync, chunk)
+            result = await _extract_from_chunk(chunk)
             all_entities.extend(result.entities)
             all_relations.extend(result.relations)
         except Exception:  # noqa: BLE001
