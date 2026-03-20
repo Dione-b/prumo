@@ -18,12 +18,10 @@ from __future__ import annotations
 
 from fastapi import BackgroundTasks
 
-from app.adapters.remote_graph_adapter import RemoteGraphAdapter
 from app.application.use_cases import (
     CreateProjectUseCase,
     DeleteBusinessRuleUseCase,
     DeleteKnowledgeDocumentUseCase,
-    GetKnowledgeDocumentStatusUseCase,
     IngestBusinessUseCase,
     IngestKnowledgeDocumentUseCase,
     PurgeProjectKnowledgeUseCase,
@@ -32,23 +30,14 @@ from app.application.use_cases import (
 from app.database import async_session_factory
 from app.infrastructure.knowledge_workflows import (
     BackgroundTaskDocumentScheduler,
-    LegacyKnowledgeQueryAdapter,
+    SimpleRAGQueryAdapter,
 )
 from app.infrastructure.llm_external import ExternalAIEngineAdapter
 from app.infrastructure.uow_sqlalchemy import SQLAlchemyUnitOfWork
-from app.services.graph_query_service import GraphQueryService
 
 
 def _build_uow() -> SQLAlchemyUnitOfWork:
     return SQLAlchemyUnitOfWork(async_session_factory)
-
-
-def provide_remote_graph_adapter() -> RemoteGraphAdapter:
-    return RemoteGraphAdapter()
-
-
-def provide_graph_query_service() -> GraphQueryService:
-    return GraphQueryService(provide_remote_graph_adapter())
 
 
 def provide_create_project_use_case() -> CreateProjectUseCase:
@@ -70,18 +59,10 @@ def provide_ingest_knowledge_document_use_case(
     return IngestKnowledgeDocumentUseCase(_build_uow(), scheduler)
 
 
-def provide_get_knowledge_document_status_use_case() -> GetKnowledgeDocumentStatusUseCase:
-    return GetKnowledgeDocumentStatusUseCase(_build_uow())
-
-
-def provide_query_knowledge_use_case(
-    background_tasks: BackgroundTasks,
-) -> QueryKnowledgeUseCase:
-    scheduler = BackgroundTaskDocumentScheduler(background_tasks)
+def provide_query_knowledge_use_case() -> QueryKnowledgeUseCase:
     return QueryKnowledgeUseCase(
         _build_uow(),
-        scheduler,
-        LegacyKnowledgeQueryAdapter(),
+        SimpleRAGQueryAdapter(),
     )
 
 

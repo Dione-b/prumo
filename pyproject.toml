@@ -1,7 +1,7 @@
 [project]
 name = "prumo"
-version = "0.1.0"
-description = "Context orchestration engine for agentic IDEs"
+version = "0.2.0"
+description = "Prumo Lite — document ingestion, RAG, and structured prompt generation"
 requires-python = ">=3.11"
 
 dependencies = [
@@ -22,7 +22,7 @@ dependencies = [
     "python-multipart>=0.0.22",
     "numpy>=1.26.0",
     "pypdf>=6.7.3",
-    "tiktoken>=0.12.0",
+
     "ollama>=0.6.1",
 ]
 

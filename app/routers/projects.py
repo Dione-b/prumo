@@ -17,39 +17,31 @@
 import uuid
 
 from fastapi import APIRouter, Depends, Request, Response
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.use_cases import CreateProjectUseCase
 from app.composition import provide_create_project_use_case
-from app.domain.strategies.factory import VALID_STACKS
+from app.database import get_db
+from app.models.project import Project
 
 router = APIRouter(prefix="/projects", tags=["Projects"])
 
 
 class ProjectCreateRequest(BaseModel):
-    """Request schema for creating a new project."""
+    """Request schema para criação de projeto."""
 
     name: str = Field(..., max_length=255, description="Project name")
     description: str | None = Field(None, description="Project description")
-    stack: str = Field(..., description="Project stack target")
-
-    @field_validator("stack")
-    @classmethod
-    def validate_stack(cls, v: str) -> str:
-        """Ensure the chosen stack is valid."""
-        if v.lower() not in VALID_STACKS:
-            raise ValueError(f"Stack {v} is not valid. Choose from {VALID_STACKS}")
-        return v.lower()
 
 
 class ProjectResponse(BaseModel):
-    """Response schema for project creation."""
+    """Response schema para projeto."""
 
     id: uuid.UUID
     name: str
     description: str | None
-    llm_model: str
-    namespace: str
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -61,10 +53,9 @@ async def create_project(
     payload: ProjectCreateRequest,
     use_case: CreateProjectUseCase = Depends(provide_create_project_use_case),
 ) -> ProjectResponse:
-    """Create a new project for context ingestion."""
+    """Cria um novo projeto para ingestão de contexto."""
     record = await use_case.execute(
         name=payload.name,
-        stack=payload.stack,
         description=payload.description,
     )
 
@@ -72,3 +63,15 @@ async def create_project(
         response.headers["HX-Redirect"] = "/ui"
 
     return ProjectResponse.model_validate(record)
+
+
+@router.get("", response_model=list[ProjectResponse])
+async def list_projects(
+    db: AsyncSession = Depends(get_db),
+) -> list[ProjectResponse]:
+    """Lista todos os projetos."""
+    result = await db.execute(
+        select(Project).order_by(Project.created_at.desc())
+    )
+    projects = result.scalars().all()
+    return [ProjectResponse.model_validate(p) for p in projects]

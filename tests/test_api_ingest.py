@@ -25,8 +25,8 @@ from app.application.use_cases import (
     ProjectNotFoundError,
 )
 from app.composition import provide_ingest_business_use_case
-from app.domain.entities import BusinessRuleExtraction, BusinessRuleRecord
 from app.config import settings
+from app.domain.entities import BusinessRuleExtraction, BusinessRuleRecord
 
 
 @pytest.fixture()

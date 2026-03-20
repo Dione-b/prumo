@@ -16,26 +16,17 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime
+from dataclasses import dataclass
 from typing import Literal
 from uuid import UUID
 
 ConfidenceLevel = Literal["HIGH", "MEDIUM", "LOW"]
-KnowledgeDocumentStatus = Literal[
-    "PENDING",
-    "PROCESSING",
-    "READY",
-    "READY_PARTIAL",
-    "ERROR",
-]
-QueryMode = Literal["local", "global", "hybrid"]
+KnowledgeDocumentStatus = Literal["PENDING", "PROCESSING", "READY", "ERROR"]
 
 
 @dataclass(frozen=True, slots=True)
 class ProjectDraft:
     name: str
-    stack: str
     description: str | None = None
 
 
@@ -44,8 +35,6 @@ class ProjectRecord:
     id: UUID
     name: str
     description: str | None
-    llm_model: str
-    namespace: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,36 +71,11 @@ class BusinessRuleRecord:
 
 
 @dataclass(frozen=True, slots=True)
-class KnowledgeEntity:
-    name: str
-    entity_type: str
-    description: str
-    is_valid: bool = True
-
-
-@dataclass(frozen=True, slots=True)
-class GraphRelation:
-    source: str
-    target: str
-    relation_type: str
-    description: str
-    confidence: ConfidenceLevel = "MEDIUM"
-    is_valid: bool = True
-
-
-@dataclass(frozen=True, slots=True)
-class KnowledgeEntityExtraction:
-    entities: tuple[KnowledgeEntity, ...] = ()
-    relations: tuple[GraphRelation, ...] = ()
-
-
-@dataclass(frozen=True, slots=True)
 class KnowledgeDocumentDraft:
     project_id: UUID
     title: str
     source_type: str
     content: str | None = None
-    metadata: dict[str, object] | None = None
     status: KnowledgeDocumentStatus = "PROCESSING"
 
 
@@ -122,11 +86,7 @@ class KnowledgeDocumentRecord:
     title: str
     source_type: str
     status: KnowledgeDocumentStatus
-    gemini_file_uri: str | None
-    gemini_cache_name: str | None
-    cache_expires_at: datetime | None
-    raw_content: str | None
-    metadata_json: dict[str, object] | None = field(default=None)
+    content: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

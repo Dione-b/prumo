@@ -17,12 +17,11 @@
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
 
 from app.application.use_cases import (
     DeleteKnowledgeDocumentUseCase,
-    GetKnowledgeDocumentStatusUseCase,
     IngestKnowledgeDocumentUseCase,
     KnowledgeDocumentNotFoundError,
     PurgeProjectKnowledgeUseCase,
@@ -30,7 +29,6 @@ from app.application.use_cases import (
 )
 from app.composition import (
     provide_delete_knowledge_document_use_case,
-    provide_get_knowledge_document_status_use_case,
     provide_ingest_knowledge_document_use_case,
     provide_purge_project_knowledge_use_case,
     provide_query_knowledge_use_case,
@@ -38,10 +36,8 @@ from app.composition import (
 from app.domain.entities import KnowledgeAnswerResult
 from app.schemas.knowledge import (
     AnswerCitation,
-    CacheRefreshingResponse,
     DocumentIngestRequest,
     KnowledgeAnswer,
-    QueryMode,
 )
 
 router = APIRouter(prefix="/knowledge", tags=["Knowledge Base"])
@@ -69,13 +65,12 @@ async def ingest_document(
         provide_ingest_knowledge_document_use_case
     ),
 ) -> Any:
-    """Ingest a knowledge document and trigger asynchronous cache processing."""
+    """Ingere um documento de conhecimento e agenda processamento em background."""
     result = await use_case.execute(
         project_id=request.project_id,
         title=request.title,
         content=request.content,
         source_type=request.source_type,
-        metadata=request.metadata,
     )
     if result.is_existing:
         return JSONResponse(
@@ -89,69 +84,22 @@ async def ingest_document(
     return {"document_id": str(result.document.id), "status": "PROCESSING"}
 
 
-@router.get("/documents/{document_id}/status")
-async def get_document_status(
-    document_id: UUID,
-    use_case: GetKnowledgeDocumentStatusUseCase = Depends(
-        provide_get_knowledge_document_status_use_case
-    ),
-) -> Any:
-    """Return the current processing status for a knowledge document."""
-    try:
-        doc = await use_case.execute(document_id=document_id)
-    except KnowledgeDocumentNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-    return {
-        "document_id": str(doc.id),
-        "status": doc.status,
-        "metadata": doc.metadata_json,
-    }
-
-
-@router.post(
-    "/query",
-    responses={
-        200: {"model": KnowledgeAnswer},
-        202: {"model": CacheRefreshingResponse},
-    },
-)
+@router.post("/query", response_model=KnowledgeAnswer)
 async def query_knowledge(
     project_id: UUID,
     question: str,
-    background_tasks: BackgroundTasks,
-    mode: QueryMode = "hybrid",
     use_case: QueryKnowledgeUseCase = Depends(provide_query_knowledge_use_case),
 ) -> Any:
-    """Query the knowledge base for a project using cached document context.
-
-    Supports three query modes:
-    - 'local':  Entity-level via pgvector + CTE traversal.
-    - 'global': Community summaries.
-    - 'hybrid': Local → Global with confidence gating (default).
-    """
-    del background_tasks
+    """Consulta a base de conhecimento via RAG (busca vetorial + síntese Gemini)."""
     result = await use_case.execute(
         project_id=project_id,
         question=question,
-        mode=mode,
     )
 
     if result is None:
         raise HTTPException(
             status_code=404,
             detail="No active documents found for this project.",
-        )
-
-    if isinstance(result, CacheRefreshingResponse):
-        if result.status == "PROCESSING_WAIT":
-            raise HTTPException(
-                status_code=503,
-                detail="Documents are still processing.",
-            )
-        return JSONResponse(
-            status_code=status.HTTP_202_ACCEPTED,
-            content=result.model_dump(),
         )
 
     return _to_knowledge_answer(result)
@@ -164,7 +112,7 @@ async def delete_document(
         provide_delete_knowledge_document_use_case
     ),
 ) -> Any:
-    """Delete a document and related graph nodes."""
+    """Remove um documento e seus dados associados."""
     try:
         await use_case.execute(document_id=document_id)
     except KnowledgeDocumentNotFoundError as exc:
@@ -172,20 +120,19 @@ async def delete_document(
 
     return JSONResponse(
         status_code=status.HTTP_200_OK,
-        content={"message": "Document and associated entities deleted."},
+        content={"message": "Document deleted."},
     )
 
 
 @router.delete("/purge-all")
 async def purge_project_data(
     project_id: UUID,
-    keep_documents: bool = False,
     use_case: PurgeProjectKnowledgeUseCase = Depends(
         provide_purge_project_knowledge_use_case
     ),
 ) -> Any:
-    """Purge project graph, optionally purging documents as well."""
-    await use_case.execute(project_id=project_id, keep_documents=keep_documents)
+    """Remove todos os documentos e dados de conhecimento do projeto."""
+    await use_case.execute(project_id=project_id)
 
     return JSONResponse(
         status_code=status.HTTP_200_OK,

@@ -39,7 +39,7 @@ class FakeProjectRepository:
     def __init__(self, project: ProjectRecord | None) -> None:
         self._project = project
 
-    async def add(self, draft):  # pragma: no cover - not used here
+    async def add(self, draft):  # pragma: no cover
         raise NotImplementedError
 
     async def get_by_id(self, project_id: uuid.UUID) -> ProjectRecord | None:
@@ -83,11 +83,7 @@ class FakeKnowledgeDocumentRepository:
             title=draft.title,
             source_type=draft.source_type,
             status=draft.status,
-            gemini_file_uri=None,
-            gemini_cache_name=None,
-            cache_expires_at=None,
-            raw_content=draft.content,
-            metadata_json=draft.metadata,
+            content=draft.content,
         )
 
     async def get_by_id(self, document_id: uuid.UUID):  # pragma: no cover
@@ -101,16 +97,19 @@ class FakeKnowledgeDocumentRepository:
     ) -> KnowledgeDocumentRecord | None:
         return None
 
-    async def list_queryable_by_project(self, project_id: uuid.UUID):  # pragma: no cover
+    async def list_ready_by_project(
+        self, project_id: uuid.UUID
+    ):  # pragma: no cover
         return []
 
-    async def mark_processing(self, document_ids: list[uuid.UUID]) -> None:  # pragma: no cover
-        return None
-
-    async def delete_by_id(self, document_id: uuid.UUID) -> bool:  # pragma: no cover
+    async def delete_by_id(
+        self, document_id: uuid.UUID
+    ) -> bool:  # pragma: no cover
         return False
 
-    async def purge_project(self, project_id: uuid.UUID, keep_documents: bool) -> None:  # pragma: no cover
+    async def purge_project(
+        self, project_id: uuid.UUID
+    ) -> None:  # pragma: no cover
         return None
 
 
@@ -139,13 +138,6 @@ class FakeLLMEngine:
             warnings=("review manually",),
         )
 
-    async def extract_entities(
-        self,
-        text: str,
-        system_prompt: str | None = None,
-    ):  # pragma: no cover - not used here
-        raise NotImplementedError
-
 
 class FakeScheduler:
     def __init__(self) -> None:
@@ -157,22 +149,23 @@ class FakeScheduler:
 
 @pytest.mark.asyncio
 async def test_ingest_business_use_case_uses_ports_only() -> None:
+    # Arrange
     project = ProjectRecord(
         id=uuid.uuid4(),
         name="Prumo",
         description=None,
-        llm_model="gemini-1.5-pro",
-        namespace="default",
     )
     uow = FakeUnitOfWork(project)
     use_case = IngestBusinessUseCase(uow, FakeLLMEngine())
 
+    # Act
     result = await use_case.execute(
         project_id=project.id,
         raw_text="Need onboarding flow with FastAPI and Postgres",
         source="meeting.txt",
     )
 
+    # Assert
     assert result.extraction.client_name == "Acme"
     assert len(uow.rules.saved_rules) == 1
     assert uow.rules.saved_rules[0].source == "meeting.txt"
@@ -181,9 +174,11 @@ async def test_ingest_business_use_case_uses_ports_only() -> None:
 
 @pytest.mark.asyncio
 async def test_ingest_business_use_case_fails_fast_without_project() -> None:
+    # Arrange
     uow = FakeUnitOfWork(project=None)
     use_case = IngestBusinessUseCase(uow, FakeLLMEngine())
 
+    # Act / Assert
     with pytest.raises(ProjectNotFoundError):
         await use_case.execute(
             project_id=uuid.uuid4(),
@@ -197,25 +192,25 @@ async def test_ingest_business_use_case_fails_fast_without_project() -> None:
 
 @pytest.mark.asyncio
 async def test_ingest_knowledge_document_schedules_processing() -> None:
+    # Arrange
     project = ProjectRecord(
         id=uuid.uuid4(),
         name="Prumo",
         description=None,
-        llm_model="gemini-1.5-pro",
-        namespace="default",
     )
     uow = FakeUnitOfWork(project)
     scheduler = FakeScheduler()
     use_case = IngestKnowledgeDocumentUseCase(uow, scheduler)
 
+    # Act
     result = await use_case.execute(
         project_id=project.id,
         title="ADR-001",
         content="Hexagonal architecture notes",
         source_type="text/markdown",
-        metadata={"author": "team"},
     )
 
+    # Assert
     assert result.is_existing is False
     assert len(uow.knowledge_documents.saved_documents) == 1
     assert scheduler.scheduled_ids == [result.document.id]

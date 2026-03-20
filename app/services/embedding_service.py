@@ -14,12 +14,9 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 
-"""Embedding service for graph nodes using Qwen3 via Ollama.
+"""Embedding service using Qwen3 via Ollama.
 
-Fetches nodes with missing embeddings from the database, generates
-embeddings in batches natively async via ollama.AsyncClient, and writes them
-back. This service NEVER calls session.commit() — the transaction
-boundary belongs to the task owner (C_03).
+Gera embeddings sequencialmente para proteger a VRAM.
 """
 
 from __future__ import annotations

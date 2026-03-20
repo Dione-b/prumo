@@ -16,20 +16,19 @@
 
 from __future__ import annotations
 
-from typing import AsyncContextManager, Protocol
+from contextlib import AbstractAsyncContextManager
+from typing import Protocol
 from uuid import UUID
 
 from app.domain.entities import (
-    KnowledgeAnswerResult,
     BusinessRuleDraft,
     BusinessRuleExtraction,
     BusinessRuleRecord,
+    KnowledgeAnswerResult,
     KnowledgeDocumentDraft,
     KnowledgeDocumentRecord,
-    KnowledgeEntityExtraction,
     ProjectDraft,
     ProjectRecord,
-    QueryMode,
 )
 
 
@@ -57,16 +56,14 @@ class KnowledgeDocumentRepository(Protocol):
         source_type: str,
     ) -> KnowledgeDocumentRecord | None: ...
 
-    async def list_queryable_by_project(
+    async def list_ready_by_project(
         self,
         project_id: UUID,
     ) -> list[KnowledgeDocumentRecord]: ...
 
-    async def mark_processing(self, document_ids: list[UUID]) -> None: ...
-
     async def delete_by_id(self, document_id: UUID) -> bool: ...
 
-    async def purge_project(self, project_id: UUID, keep_documents: bool) -> None: ...
+    async def purge_project(self, project_id: UUID) -> None: ...
 
 
 class UnitOfWork(Protocol):
@@ -79,21 +76,11 @@ class UnitOfWork(Protocol):
     @property
     def knowledge_documents(self) -> KnowledgeDocumentRepository: ...
 
-    def transaction(self) -> AsyncContextManager["UnitOfWork"]: ...
+    def transaction(self) -> AbstractAsyncContextManager[UnitOfWork]: ...
 
 
 class LLMEnginePort(Protocol):
     async def extract_business_rules(self, text: str) -> BusinessRuleExtraction: ...
-
-    async def extract_entities(
-        self,
-        text: str,
-        system_prompt: str | None = None,
-    ) -> KnowledgeEntityExtraction: ...
-
-
-class EmbeddingPort(Protocol):
-    async def embed_batch(self, texts: list[str]) -> list[list[float]]: ...
 
 
 class DocumentProcessingSchedulerPort(Protocol):
@@ -101,21 +88,8 @@ class DocumentProcessingSchedulerPort(Protocol):
 
 
 class KnowledgeQueryPort(Protocol):
-    async def query_graph(
-        self,
-        mode: QueryMode,
-        project_id: UUID,
-        question: str,
-    ) -> KnowledgeAnswerResult: ...
-
-    async def hybrid_query(
+    async def answer_question(
         self,
         project_id: UUID,
         question: str,
-    ) -> KnowledgeAnswerResult: ...
-
-    async def answer_with_cache(
-        self,
-        question: str,
-        ready_documents: list[KnowledgeDocumentRecord],
     ) -> KnowledgeAnswerResult: ...

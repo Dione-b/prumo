@@ -22,13 +22,12 @@ from app.models.project import Project
 
 
 async def create_project(
-    db: AsyncSession, name: str, stack: str, description: str | None = None
+    db: AsyncSession, name: str, description: str | None = None
 ) -> Project:
-    """Create and persist a new Project record."""
+    """Cria e persiste um novo Project."""
     record = Project(
         name=name,
         description=description,
-        config_json={"stack": stack},
     )
     db.add(record)
     await db.commit()
@@ -37,5 +36,5 @@ async def create_project(
 
 
 async def get_project(db: AsyncSession, project_id: uuid.UUID) -> Project | None:
-    """Retrieve a Project record by its UUID."""
+    """Busca um Project pelo UUID."""
     return await db.get(Project, project_id)

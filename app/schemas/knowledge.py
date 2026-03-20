@@ -14,13 +14,10 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 
-from typing import Any, Literal
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, PrivateAttr, model_validator
-
-# Query mode for the /knowledge/query endpoint.
-QueryMode = Literal["local", "global", "hybrid"]
 
 
 class DocumentIngestRequest(BaseModel):
@@ -28,7 +25,6 @@ class DocumentIngestRequest(BaseModel):
     title: str = Field(..., max_length=255)
     content: str | None = None
     source_type: str
-    metadata: dict[str, Any] | None = None
 
 
 class AnswerCitation(BaseModel):
@@ -36,12 +32,12 @@ class AnswerCitation(BaseModel):
     snippet: str
     source: str | None = Field(
         default=None,
-        description="Human-readable source label (entity name or doc title).",
+        description="Human-readable source label (doc title or relevance).",
     )
 
     @model_validator(mode="after")
-    def coerce_source_from_entity(self) -> "AnswerCitation":
-        """Ensure source is always populated for Phase 2 compatibility."""
+    def coerce_source_from_document(self) -> "AnswerCitation":
+        """Garante source sempre preenchido quando há document_id."""
         if self.source is None and self.document_id is not None:
             object.__setattr__(self, "source", f"doc:{self.document_id}")
         return self
@@ -88,20 +84,6 @@ class KnowledgeAnswer(BaseModel):
 
         return self
 
-    @model_validator(mode="after")
-    def apply_c_01_downgrades(self) -> "KnowledgeAnswer":
-        """Downgrade to MEDIUM if explicit cache was unavailable."""
-        if any("explicit_cache_unavailable" in w for w in self._warnings):
-            if self.confidence_level == "HIGH":
-                object.__setattr__(self, "confidence_level", "MEDIUM")
-        return self
-
     @property
     def warnings(self) -> list[str]:
         return self._warnings
-
-
-class CacheRefreshingResponse(BaseModel):
-    status: str
-    stale_document_ids: list[str]
-    retry_after_seconds: int

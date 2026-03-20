@@ -14,20 +14,26 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 
+from __future__ import annotations
+
 import uuid
 from datetime import datetime
-from typing import Any
 
+from pgvector.sqlalchemy import Vector  # type: ignore[import-untyped]
 from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, Text
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
+from app.config import settings
+
 from . import Base
+
+EMBEDDING_DIMENSIONS = settings.ollama_embedding_dim
 
 
 class KnowledgeDocument(Base):
-    """Knowledge document associated with a project and optional Gemini cache."""
+    """Documento de conhecimento com embedding vetorial para RAG."""
 
     __tablename__ = "knowledge_documents"
 
@@ -43,18 +49,15 @@ class KnowledgeDocument(Base):
     )
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     source_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    content: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="PENDING")
-    gemini_file_uri: Mapped[str | None] = mapped_column(Text, nullable=True)
-    gemini_cache_name: Mapped[str | None] = mapped_column(Text, nullable=True)
-    cache_expires_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True),
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    embedding: Mapped[list[float] | None] = mapped_column(  # type: ignore[assignment]
+        Vector(EMBEDDING_DIMENSIONS),
         nullable=True,
     )
-    raw_content: Mapped[str | None] = mapped_column(Text, nullable=True)
-    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(
-        JSONB,
-        nullable=True,
-    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=func.now(),
@@ -67,7 +70,7 @@ class KnowledgeDocument(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "status IN ('PENDING', 'PROCESSING', 'READY', 'READY_PARTIAL', 'ERROR')",
+            "status IN ('PENDING', 'PROCESSING', 'READY', 'ERROR')",
             name="ck_knowledge_status_valid",
         ),
     )

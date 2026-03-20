@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.entities import (
@@ -32,9 +32,8 @@ from app.domain.entities import (
 from app.models.business_rule import BusinessRule
 from app.models.knowledge import KnowledgeDocument
 from app.models.project import Project
-from app.services.graph_services import delete_knowledge_document, purge_project_knowledge
 
-_QUERYABLE_STATUSES = ("READY", "READY_PARTIAL", "PROCESSING")
+_QUERYABLE_STATUSES = ("READY",)
 
 
 def _map_project(record: Project) -> ProjectRecord:
@@ -42,8 +41,6 @@ def _map_project(record: Project) -> ProjectRecord:
         id=record.id,
         name=record.name,
         description=record.description,
-        llm_model=record.llm_model,
-        namespace=record.namespace,
     )
 
 
@@ -69,11 +66,7 @@ def _map_knowledge_document(record: KnowledgeDocument) -> KnowledgeDocumentRecor
         title=record.title,
         source_type=record.source_type,
         status=record.status,
-        gemini_file_uri=record.gemini_file_uri,
-        gemini_cache_name=record.gemini_cache_name,
-        cache_expires_at=record.cache_expires_at,
-        raw_content=record.raw_content,
-        metadata_json=dict(record.metadata_json) if record.metadata_json else None,
+        content=record.content,
     )
 
 
@@ -85,7 +78,6 @@ class SQLAlchemyProjectRepository:
         record = Project(
             name=draft.name,
             description=draft.description,
-            config_json={"stack": draft.stack},
         )
         self._session.add(record)
         await self._session.flush()
@@ -139,8 +131,7 @@ class SQLAlchemyKnowledgeDocumentRepository:
             project_id=draft.project_id,
             title=draft.title,
             source_type=draft.source_type,
-            raw_content=draft.content,
-            metadata_json=draft.metadata,
+            content=draft.content,
             status=draft.status,
         )
         self._session.add(record)
@@ -171,7 +162,7 @@ class SQLAlchemyKnowledgeDocumentRepository:
             return None
         return _map_knowledge_document(record)
 
-    async def list_queryable_by_project(
+    async def list_ready_by_project(
         self,
         project_id: UUID,
     ) -> list[KnowledgeDocumentRecord]:
@@ -182,21 +173,15 @@ class SQLAlchemyKnowledgeDocumentRepository:
         result = await self._session.execute(stmt)
         return [_map_knowledge_document(record) for record in result.scalars().all()]
 
-    async def mark_processing(self, document_ids: list[UUID]) -> None:
-        if not document_ids:
-            return
-        await self._session.execute(
-            update(KnowledgeDocument)
-            .where(KnowledgeDocument.id.in_(document_ids))
-            .values(status="PROCESSING")
-        )
-
     async def delete_by_id(self, document_id: UUID) -> bool:
-        return await delete_knowledge_document(self._session, document_id)
+        result = await self._session.execute(
+            delete(KnowledgeDocument).where(KnowledgeDocument.id == document_id)
+        )
+        return bool(result.rowcount)  # type: ignore[attr-defined]
 
-    async def purge_project(self, project_id: UUID, keep_documents: bool) -> None:
-        await purge_project_knowledge(
-            self._session,
-            project_id,
-            keep_documents=keep_documents,
+    async def purge_project(self, project_id: UUID) -> None:
+        await self._session.execute(
+            delete(KnowledgeDocument).where(
+                KnowledgeDocument.project_id == project_id
+            )
         )

@@ -16,19 +16,18 @@
 
 from __future__ import annotations
 
+from uuid import UUID
+
 from fastapi import BackgroundTasks
 
-from app.adapters.remote_graph_adapter import RemoteGraphAdapter
 from app.database import async_session_factory
 from app.domain.entities import (
     AnswerCitation,
     KnowledgeAnswerResult,
-    KnowledgeDocumentRecord,
-    QueryMode,
 )
 from app.schemas.knowledge import KnowledgeAnswer
-from app.services.graph_query_service import GraphQueryService
-from app.services.knowledge_gemini import answer_question_with_cache, process_document_task
+from app.services.knowledge_gemini import process_document_task
+from app.services.knowledge_orchestrator import query_rag
 
 
 def _map_answer(answer: KnowledgeAnswer) -> KnowledgeAnswerResult:
@@ -51,38 +50,25 @@ class BackgroundTaskDocumentScheduler:
     def __init__(self, background_tasks: BackgroundTasks) -> None:
         self._background_tasks = background_tasks
 
-    def schedule_document_processing(self, document_id) -> None:
+    def schedule_document_processing(self, document_id: UUID) -> None:
         self._background_tasks.add_task(process_document_task, document_id)
 
 
-class LegacyKnowledgeQueryAdapter:
-    def __init__(self) -> None:
-        self._graph_query_service = GraphQueryService(RemoteGraphAdapter())
+class SimpleRAGQueryAdapter:
+    """Adapter simples para RAG via pgvector."""
 
-    async def query_graph(
+    async def answer_question(
         self,
-        mode: QueryMode,
-        project_id,
+        project_id: UUID,
         question: str,
     ) -> KnowledgeAnswerResult:
         async with async_session_factory() as db:
-            if mode == "local":
-                return _map_answer(
-                    await self._graph_query_service.local_query(db, project_id, question)
-                )
-            return _map_answer(
-                await self._graph_query_service.global_query(db, project_id, question)
+            answer = await query_rag(db, project_id, question)
+
+        if answer is None:
+            return KnowledgeAnswerResult(
+                answer="Nenhum documento encontrado para este projeto.",
+                confidence_level="LOW",
             )
 
-    async def hybrid_query(self, project_id, question: str) -> KnowledgeAnswerResult:
-        async with async_session_factory() as db:
-            return _map_answer(
-                await self._graph_query_service.hybrid_query(db, project_id, question)
-            )
-
-    async def answer_with_cache(
-        self,
-        question: str,
-        ready_documents: list[KnowledgeDocumentRecord],
-    ) -> KnowledgeAnswerResult:
-        return _map_answer(await answer_question_with_cache(question, ready_documents))
+        return _map_answer(answer)

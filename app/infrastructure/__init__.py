@@ -16,9 +16,9 @@
 
 from app.infrastructure.knowledge_workflows import (
     BackgroundTaskDocumentScheduler,
-    LegacyKnowledgeQueryAdapter,
+    SimpleRAGQueryAdapter,
 )
-from app.infrastructure.llm_external import EmbeddingServiceAdapter, ExternalAIEngineAdapter
+from app.infrastructure.llm_external import ExternalAIEngineAdapter
 from app.infrastructure.repositories import (
     SQLAlchemyBusinessRuleRepository,
     SQLAlchemyKnowledgeDocumentRepository,
@@ -28,9 +28,8 @@ from app.infrastructure.uow_sqlalchemy import SQLAlchemyUnitOfWork
 
 __all__ = [
     "BackgroundTaskDocumentScheduler",
-    "EmbeddingServiceAdapter",
     "ExternalAIEngineAdapter",
-    "LegacyKnowledgeQueryAdapter",
+    "SimpleRAGQueryAdapter",
     "SQLAlchemyBusinessRuleRepository",
     "SQLAlchemyKnowledgeDocumentRepository",
     "SQLAlchemyProjectRepository",
