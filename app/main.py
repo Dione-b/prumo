@@ -29,7 +29,7 @@ from app.database import async_session_factory
 from app.logger import setup_logging
 from app.models.knowledge import KnowledgeDocument
 from app.models.project import Project
-from app.routers import business, ingest, knowledge, projects, prompts, test_ui
+from app.routers import cookbooks, knowledge, projects, test_ui
 
 setup_logging()
 
@@ -46,9 +46,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         project = result.scalar_one_or_none()
         project_name = project.name if project else "Unknown"
 
-        doc_count_res = await session.execute(
-            select(func.count(KnowledgeDocument.id))
-        )
+        doc_count_res = await session.execute(select(func.count(KnowledgeDocument.id)))
         docs_count = doc_count_res.scalar_one()
 
         logger.info(
@@ -62,18 +60,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 app = FastAPI(
     title="Prumo Lite API",
     description=(
-        "Automatiza criação de prompts de implementação "
-        "a partir de documentos e regras de negócio"
+        "Gerador Inteligente de Cookbooks para o ecossistema Stellar "
+        "baseado puramente em modelos Gemini."
     ),
     version="0.2.0",
     lifespan=lifespan,
 )
 
 app.include_router(projects.router)
-app.include_router(business.router)
-app.include_router(ingest.router)
 app.include_router(knowledge.router)
-app.include_router(prompts.router)
+app.include_router(cookbooks.router)
 app.include_router(test_ui.router)
 
 

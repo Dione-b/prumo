@@ -29,7 +29,7 @@ from app.config import settings
 
 from . import Base
 
-EMBEDDING_DIMENSIONS = settings.ollama_embedding_dim
+EMBEDDING_DIMENSIONS = settings.gemini_embedding_dim
 
 
 class KnowledgeDocument(Base):

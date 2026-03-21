@@ -196,9 +196,7 @@ class PromptGeneratorService:
             return "\n\n".join(context_blocks)
 
         except Exception:  # noqa: BLE001
-            logger.warning(
-                "rag_context_fetch_failed", project_id=str(project_id)
-            )
+            logger.warning("rag_context_fetch_failed", project_id=str(project_id))
             warnings.append("rag_unavailable")
             return ""
 

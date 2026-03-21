@@ -1,77 +1,74 @@
-# Copyright (C) 2026 Dione Bastos
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU Affero General Public License as published
-# by the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU Affero General Public License for more details.
-#
-# You should have received a copy of the GNU Affero General Public License
-# along with this program.  If not, see <https://www.gnu.org/licenses/>.
-
+from __future__ import annotations
 
 import uuid
+from typing import Any
 
-from fastapi import APIRouter, Depends, Request, Response
-from pydantic import BaseModel, ConfigDict, Field
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.application.use_cases import CreateProjectUseCase
-from app.composition import provide_create_project_use_case
 from app.database import get_db
 from app.models.project import Project
+from app.schemas.project import ProjectCreate, ProjectResponse
 
 router = APIRouter(prefix="/projects", tags=["Projects"])
 
 
-class ProjectCreateRequest(BaseModel):
-    """Request schema para criação de projeto."""
-
-    name: str = Field(..., max_length=255, description="Project name")
-    description: str | None = Field(None, description="Project description")
-
-
-class ProjectResponse(BaseModel):
-    """Response schema para projeto."""
-
-    id: uuid.UUID
-    name: str
-    description: str | None
-
-    model_config = ConfigDict(from_attributes=True)
-
-
-@router.post("", response_model=ProjectResponse, status_code=201)
+@router.post("", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
 async def create_project(
-    request: Request,
-    response: Response,
-    payload: ProjectCreateRequest,
-    use_case: CreateProjectUseCase = Depends(provide_create_project_use_case),
-) -> ProjectResponse:
-    """Cria um novo projeto para ingestão de contexto."""
-    record = await use_case.execute(
-        name=payload.name,
-        description=payload.description,
+    request: ProjectCreate,
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    """Cria um novo projeto."""
+    new_project = Project(
+        name=request.name,
+        description=request.description,
     )
+    db.add(new_project)
+    await db.flush()
+    await db.refresh(new_project)
+    await db.commit()
 
-    if "hx-request" in request.headers:
-        response.headers["HX-Redirect"] = "/ui"
-
-    return ProjectResponse.model_validate(record)
+    return ProjectResponse(
+        id=new_project.id,
+        name=new_project.name,
+        description=new_project.description,
+        created_at=new_project.created_at,
+    )
 
 
 @router.get("", response_model=list[ProjectResponse])
 async def list_projects(
     db: AsyncSession = Depends(get_db),
-) -> list[ProjectResponse]:
+) -> Any:
     """Lista todos os projetos."""
-    result = await db.execute(
-        select(Project).order_by(Project.created_at.desc())
-    )
+    result = await db.execute(select(Project).order_by(Project.created_at.desc()))
     projects = result.scalars().all()
-    return [ProjectResponse.model_validate(p) for p in projects]
+
+    return [
+        ProjectResponse(
+            id=p.id,
+            name=p.name,
+            description=p.description,
+            created_at=p.created_at,
+        )
+        for p in projects
+    ]
+
+
+@router.get("/{project_id}", response_model=ProjectResponse)
+async def get_project(
+    project_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    """Retorna detalhes de um projeto."""
+    project = await db.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    return ProjectResponse(
+        id=project.id,
+        name=project.name,
+        description=project.description,
+        created_at=project.created_at,
+    )

@@ -22,8 +22,6 @@ dependencies = [
     "python-multipart>=0.0.22",
     "numpy>=1.26.0",
     "pypdf>=6.7.3",
-
-    "ollama>=0.6.1",
 ]
 
 [dependency-groups]

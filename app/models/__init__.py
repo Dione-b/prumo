@@ -23,7 +23,7 @@ class Base(DeclarativeBase):
 
 # Re-export all models so Alembic autogenerate detects them.
 # These imports MUST come after `Base` is defined to avoid circular imports.
-from .business_rule import BusinessRule as BusinessRule  # noqa: E402
+from .cookbook import CookbookRecipe as CookbookRecipe  # noqa: E402
 from .knowledge import KnowledgeDocument as KnowledgeDocument  # noqa: E402
 from .project import Project as Project  # noqa: E402
 from .prompt import GeneratedPromptModel as GeneratedPromptModel  # noqa: E402
@@ -31,7 +31,7 @@ from .prompt import GeneratedPromptModel as GeneratedPromptModel  # noqa: E402
 __all__ = [
     "Base",
     "Project",
-    "BusinessRule",
+    "CookbookRecipe",
     "KnowledgeDocument",
     "GeneratedPromptModel",
 ]

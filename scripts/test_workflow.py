@@ -1,11 +1,10 @@
-"""Script de teste end-to-end para Prumo Lite.
+"""Script de teste end-to-end para Prumo Lite - Cookbook Generator.
 
 Fluxo:
   1. Cria um projeto
-  2. Ingere um documento de texto
-  3. Aguarda processamento
-  4. Executa query RAG
-  5. Gera prompt YAML
+  2. Ingere um documento texto contendo um tutorial técnico (Stellar)
+  3. Aguarda processamento via pipeline background
+  4. Lista os Cookbooks extraídos via requisição GET
 """
 
 from __future__ import annotations
@@ -15,25 +14,46 @@ import time
 from uuid import UUID
 
 import httpx
+from pydantic import BaseModel
+
 
 BASE_URL = "http://localhost:8000"
-API_KEY = "prumo-dev-key"  # Ajustar conforme .env
 
 SAMPLE_DOCUMENT = """
-## Projeto Prumo Lite
+## Como integrar a wallet Freighter no seu DApp Soroban
 
-### Regras de Negócio
-1. O sistema deve aceitar documentos em formato texto e PDF.
-2. Embeddings são gerados via Qwen3 através do Ollama local.
-3. Busca vetorial usa pgvector com cosine similarity.
-4. A síntese de respostas é feita pelo Gemini 2.5 Pro.
-5. Prompts gerados em formato YAML para uso no Cursor IDE.
+A Freighter é a wallet de extensão de browser recomendada para a rede Stellar.
+Abaixo mostramos como solicitar a conexão na aplicação web e pedir a chave pública.
 
-### Restrições Técnicas
-- PostgreSQL 15+ com extensão pgvector
-- Ollama rodando localmente na porta 11434
-- FastAPI como framework web
-- Pydantic v2 para validação
+### Pré-requisitos
+- Node.js 18+ instalado
+- Extensão Freighter no navegador
+- Pacote `@stellar/freighter-api` instalado via npm ou yarn
+
+### Passos
+1. No seu arquivo `App.tsx`, importe o pacote e crie a função de conectar.
+2. Chame `setAllowed()` caso queira pedir permissão para assinar transações.
+3. Chame `getPublicKey()` para carregar a conta do usuário conectado.
+4. Salve no estado da aplicação.
+
+### Exemplo de Código
+```tsx
+import { isAllowed, setAllowed, getPublicKey } from "@stellar/freighter-api";
+
+async function connectWallet() {
+  if (await isAllowed()) {
+    const pk = await getPublicKey();
+    console.log("Conectado com:", pk);
+  } else {
+    await setAllowed();
+    const pk = await getPublicKey();
+    console.log("Conectado na 1ª vez:", pk);
+  }
+}
+```
+
+Se ocorrer erro de conexão certifique-se de que o Freighter está logado.
+Para mais informações consulte `https://docs.freighter.app`.
 """
 
 
@@ -41,14 +61,14 @@ async def main() -> None:
     async with httpx.AsyncClient(base_url=BASE_URL, timeout=120.0) as client:
         # 1. Criar projeto
         print("=" * 60)
-        print("[1/5] Criando projeto...")
+        print("[1/4] Criando projeto...")
         t0 = time.monotonic()
 
         resp = await client.post(
             "/projects",
             json={
-                "name": f"test-project-{int(time.time())}",
-                "description": "Projeto de teste do Prumo Lite",
+                "name": f"freighter-integration-{int(time.time())}",
+                "description": "Exemplo de Integração Freighter",
             },
         )
         resp.raise_for_status()
@@ -58,14 +78,14 @@ async def main() -> None:
         print(f"  ⏱ {time.monotonic() - t0:.2f}s\n")
 
         # 2. Ingerir documento
-        print("[2/5] Ingerindo documento...")
+        print("[2/4] Ingerindo documento (Newsletter da Stellar)...")
         t0 = time.monotonic()
 
         resp = await client.post(
             "/knowledge/documents",
             json={
                 "project_id": project_id,
-                "title": "Regras do Prumo Lite",
+                "title": "Documentação Oficial Freighter",
                 "content": SAMPLE_DOCUMENT,
                 "source_type": "text/plain",
             },
@@ -73,78 +93,47 @@ async def main() -> None:
         resp.raise_for_status()
         ingest_result = resp.json()
         doc_id = ingest_result["document_id"]
-        print(f"  ✓ Documento ingerido: {doc_id}")
+        print(f"  ✓ Documento ingerido na fila: {doc_id}")
         print(f"  ⏱ {time.monotonic() - t0:.2f}s\n")
 
         # 3. Aguardar processamento
-        print("[3/5] Aguardando processamento (embedding)...")
+        print("[3/4] Aguardando processamento da extração (Gemini)...")
         t0 = time.monotonic()
 
-        for attempt in range(30):
-            await asyncio.sleep(2)
-            # Vamos verificar via query se já processou
-            # Tentando query que irá retornar 404 se não houver docs READY
+        for attempt in range(15):
+            await asyncio.sleep(5)
+            # Vamos verificar via GET na rota de cookbooks se apareceu algo
             try:
-                resp = await client.post(
-                    "/knowledge/query",
-                    params={
-                        "project_id": project_id,
-                        "question": "test",
-                    },
-                )
+                resp = await client.get("/cookbooks")
                 if resp.status_code == 200:
-                    print(f"  ✓ Documento processado! (tentativa {attempt + 1})")
-                    print(f"  ⏱ {time.monotonic() - t0:.2f}s\n")
-                    break
-            except Exception:
-                pass
+                    data = resp.json()
+                    if len(data) > 0:
+                        print(f"  ✓ Receitas de Cookbook processadas! (tentativa {attempt + 1})")
+                        print(f"  ⏱ {time.monotonic() - t0:.2f}s\n")
+                        break
+            except Exception as e:
+                print("Error ao bater /cookbooks:", e)
         else:
-            print("  ✗ Timeout aguardando processamento")
+            print("  ✗ Timeout aguardando as receitas ficarem prontas (pode estar demorando na API Gemini)")
             return
 
-        # 4. Query RAG
-        print("[4/5] Executando query RAG...")
-        t0 = time.monotonic()
+        # 4. Listar e exibir as receitas encontradas
+        print("[4/4] Listando Cookbooks Extraídos...")
+        resp = await client.get("/cookbooks")
+        recipes = resp.json()
+        
+        print(f"Total de receitas: {len(recipes)}\n")
+        for i, r in enumerate(recipes[:3]):
+            print(f"--- Receita #{i+1} ---")
+            print(f" Título     : {r.get('title')}")
+            print(f" Descrição  : {r.get('description')}")
+            print(f" Domínio    : {r.get('domain')}")
+            print(f" Snippets   : {len(r.get('code_snippets') or [])}")
+            print(f" Referências: {len(r.get('references') or [])}")
+            print()
 
-        resp = await client.post(
-            "/knowledge/query",
-            params={
-                "project_id": project_id,
-                "question": "Quais são as restrições técnicas do projeto?",
-            },
-        )
-        resp.raise_for_status()
-        answer = resp.json()
-        print(f"  ✓ Resposta: {answer['answer'][:200]}...")
-        print(f"  Confiança: {answer['confidence_level']}")
-        print(f"  Citações: {len(answer.get('citations', []))}")
-        print(f"  ⏱ {time.monotonic() - t0:.2f}s\n")
-
-        # 5. Gerar prompt YAML
-        print("[5/5] Gerando prompt YAML...")
-        t0 = time.monotonic()
-
-        resp = await client.post(
-            "/prompts/generate-cursor-yaml",
-            json={
-                "project_id": project_id,
-                "intent": "Implementar endpoint de upload de PDF com extração de texto",
-                "target_files": ["app/routers/upload.py", "app/services/pdf.py"],
-            },
-        )
-        resp.raise_for_status()
-        prompt = resp.json()
-        print(f"  ✓ Prompt gerado: {prompt['prompt_id']}")
-        print(f"  Confiança: {prompt['confidence']}")
-        print(f"  Strategies: {prompt['strategies_applied']}")
-        print(f"  ⏱ {time.monotonic() - t0:.2f}s\n")
-
-        # Resultado
         print("=" * 60)
-        print("✓ Fluxo completo executado com sucesso!")
-        print(f"  YAML preview (primeiros 300 chars):")
-        print(f"  {prompt['yaml_prompt'][:300]}...")
-        print("=" * 60)
+        print("✓ Fluxo completo de Gerador de Cookbook executado com sucesso!")
 
 
 if __name__ == "__main__":

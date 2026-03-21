@@ -14,7 +14,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 
-from pydantic import Field, SecretStr
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -32,17 +32,13 @@ class Settings(BaseSettings):
     # Storage
     prompt_storage_backend: str = "database"  # "local", "database", "both"
 
-    # Local Ingestion (Ollama)
-    ollama_base_url: str = "http://localhost:11434"
-    ollama_business_model: str = "llama3.2:3b"
-    ollama_embedding_model: str = "qwen3-embedding:0.6b"
-    ollama_embedding_dim: int = 1024  # Standard for Qwen3-0.6b
-    ollama_max_concurrent: int = 1
-    ollama_keep_alive: int = Field(
-        0,
-        ge=0,
-        description="Seconds to keep model in VRAM after request (0 = offload)",
-    )
+    # Model Choices
+    gemini_extraction_model: str = "gemini-2.5-flash"
+    gemini_embedding_model: str = "text-embedding-004"
+    gemini_embedding_dim: int = 768
+
+    # Cookbook Settings
+    cookbook_auto_generation: bool = True
 
     # Paths
     output_dir: str = "outputs"

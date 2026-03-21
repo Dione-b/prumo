@@ -44,8 +44,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.knowledge import KnowledgeDocument
 from app.models.project import Project
-from app.services.knowledge_gemini import process_document_task
-from app.services.knowledge_orchestrator import query_rag
+from app.services.cookbook_pipeline import process_document_to_cookbooks
 
 logger = structlog.get_logger()
 
@@ -132,9 +131,7 @@ async def ui_ingest(
 
             if is_binary:
                 suffix = Path(filename).suffix.lower() or ".bin"
-                _ = await asyncio.to_thread(
-                    _stream_to_tempfile, upload.file, suffix
-                )
+                _ = await asyncio.to_thread(_stream_to_tempfile, upload.file, suffix)
                 # Para PDFs, extrair texto seria feito no processamento em background
                 doc = KnowledgeDocument(
                     project_id=project_id,
@@ -171,7 +168,7 @@ async def ui_ingest(
         await db.commit()
 
         for doc in docs:
-            background_tasks.add_task(process_document_task, doc.id)
+            background_tasks.add_task(process_document_to_cookbooks, doc.id)
 
         template_str = (
             "{% from 'snippets.html' import status_polling %}"
@@ -203,7 +200,7 @@ async def ui_ingest(
     await db.refresh(doc)
     await db.commit()
 
-    background_tasks.add_task(process_document_task, doc.id)
+    background_tasks.add_task(process_document_to_cookbooks, doc.id)
 
     template_str = (
         "{% from 'snippets.html' import status_polling %}"
@@ -260,21 +257,7 @@ async def ui_query(
     question: str = Form(...),
     db: AsyncSession = Depends(get_db),
 ) -> HTMLResponse:
-    """Executa query RAG via HTMX UI."""
-    try:
-        result = await query_rag(db, project_id, question)
+    # Forward to cookbooks search because RAG has been decoupled
+    from app.routers.cookbooks import search_cookbooks_ui
 
-        if result is None:
-            return HTMLResponse(
-                "<div class='text-red-500'>No documents found. Ingest one first.</div>",
-            )
-
-        template_str = (
-            "{% from 'snippets.html' import qa_answer %}{{ qa_answer(answer) }}"
-        )
-        html = templates.env.from_string(template_str).render(answer=result)
-        return HTMLResponse(content=html)
-    except Exception as exc:  # noqa: BLE001
-        return HTMLResponse(
-            f"<div class='text-red-500'>Error querying: {exc}</div>",
-        )
+    return await search_cookbooks_ui(request, question, db)
