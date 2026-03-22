@@ -1,119 +1,129 @@
-# Prumo Lite - Stellar RAG Chat
+<p align="center">
+  <h1 align="center">🪸 Prumo</h1>
+  <p align="center">
+    <strong>Turn any documentation site into an <code>llms.txt</code> file — ready to feed your AI coding agents.</strong>
+  </p>
+</p>
 
-> Chat with Stellar docs and SDK references, tuned for Web2 developers learning the Stellar network.
+<p align="center">
+  <a href="#the-problem">The Problem</a> •
+  <a href="#how-it-works">How It Works</a> •
+  <a href="#installation">Installation</a> •
+  <a href="#usage">Usage</a> •
+  <a href="#limitations">Limitations</a>
+</p>
+
+---
 
 ## The Problem
 
-Stellar documentation is strong, but it spans many pages, SDK repositories, and ecosystem concepts that are unfamiliar to developers coming from traditional Web2 systems.
+AI models **hallucinate APIs** from new or obscure libraries because they were never trained on that documentation. When you ask an agent to use a recent library, it invents function names, parameters, and behaviors that don't exist.
 
-Prumo Lite turns that material into a searchable knowledge base and exposes a chat endpoint that answers with retrieval-backed context instead of generic guesses.
+## The Solution
 
-## What It Does
-
-- Crawls [developers.stellar.org/docs](https://developers.stellar.org/docs) and, on GitHub, these official repos (`.md` / `.mdx`): [stellar-core](https://github.com/stellar/stellar-core), [x402-stellar](https://github.com/stellar/x402-stellar), [stellar-docs](https://github.com/stellar/stellar-docs).
-- Ingests documents into PostgreSQL with `pgvector`.
-- Retrieves the most relevant documentation for a question.
-- Uses Gemini to synthesize answers grounded in retrieved sources.
-- Exposes a stateless `POST /chat/stellar` endpoint with source references.
-
-## Stack
-
-| Component | Technology |
-|---|---|
-| API | FastAPI + Pydantic v2 |
-| Database | PostgreSQL 15+ with `pgvector` |
-| ORM | SQLAlchemy 2.0 async |
-| Retrieval | Gemini embeddings (`gemini-embedding-001`) + `pgvector` |
-| Synthesis | Gemini 2.5 |
-| Scraping | `httpx` + BeautifulSoup + GitHub API |
-| Tooling | `uv`, Alembic, Ruff, mypy, pytest |
-
-## Quick Start
-
-```bash
-uv sync
-cp .env.example .env
-uv run alembic upgrade head
-uv run uvicorn app.main:app --reload
-```
-
-Create or reuse the Stellar project, then ingest sources:
-
-```bash
-uv run python scripts/ingest_stellar_docs.py
-```
-
-If you want to ingest a single source:
-
-```bash
-uv run python scripts/ingest_stellar_docs.py --source docs
-uv run python scripts/ingest_stellar_docs.py --source github
-```
-
-## API
-
-### Projects
-
-- `POST /projects`
-- `GET /projects`
-- `GET /projects/{project_id}`
-
-### Knowledge
-
-- `POST /knowledge/documents`
-- `GET /knowledge/projects/{project_id}/summary` (contagens por status; diagnostico RAG)
-- `POST /knowledge/query`
-- `DELETE /knowledge/documents/{document_id}`
-- `DELETE /knowledge/purge-all`
-
-### Chat
-
-- `POST /chat/stellar`
-
-### Cookbooks
-
-- `GET /cookbooks`
-- `POST /cookbooks/search/ui`
-- `DELETE /cookbooks/{recipe_id}`
-
-## Example Chat Request
-
-```bash
-curl -X POST http://localhost:8000/chat/stellar \
-  -H "Content-Type: application/json" \
-  -d '{
-    "question": "What is the difference between a Stellar account and a regular bank account?",
-    "session_id": "demo-session",
-    "history": []
-  }'
-```
+Prumo scrapes a documentation site, cleans the HTML, and uses an LLM (Gemini or Claude) to condense everything into a **structured index** (`llms.txt`). That file can then be used as context by any AI coding agent.
 
 ## How It Works
 
-```mermaid
-flowchart TD
-    stellarDocs[StellarDocsAndSDKs] --> crawler[StellarCrawler]
-    crawler --> ingest[KnowledgeIngestionAPI]
-    ingest --> docs[(KnowledgeDocuments)]
-    userQuestion[UserQuestion] --> embed[GeminiEmbedding]
-    embed --> retrieve[VectorSearch]
-    docs --> retrieve
-    retrieve --> synthesize[GeminiSynthesis]
-    synthesize --> chat[StellarChatResponse]
+```
+Documentation URL
+        │
+        ▼
+  ┌───────────┐     ┌───────────┐     ┌───────────┐
+  │  Crawler   │ ──▸ │  Exporter  │ ──▸ │  llms.txt  │
+  │ (httpx +   │     │ (Gemini /  │     │ (structured│
+  │  BS4)      │     │  Claude)   │     │  Markdown)  │
+  └───────────┘     └───────────┘     └───────────┘
 ```
 
-## Adding New Sources
+1. **Crawler** — navigates the site, follows internal links, and extracts the text from each page
+2. **Exporter** — sends the content to an LLM, which generates a summary organized into sections
+3. **CLI** — saves the result as `llms.txt` in the output directory
 
-See [CONTRIBUTING.md](CONTRIBUTING.md).
-
-## Development Checks
+## Installation
 
 ```bash
-uv run pytest
+pip install prumo
+```
+
+Or with [uv](https://docs.astral.sh/uv/):
+
+```bash
+uv add prumo
+```
+
+## Usage
+
+```bash
+prumo fetch https://docs.somelib.com --output ./somelib-docs/
+# generates: ./somelib-docs/llms.txt
+```
+
+### Options
+
+| Option | Default | Description |
+|---|---|---|
+| `url` | required | Root URL of the documentation site |
+| `--output`, `-o` | `./output` | Output directory |
+| `--provider`, `-p` | `gemini` | LLM provider: `gemini` or `claude` |
+| `--api-key`, `-k` | env var | API key (see below) |
+| `--max-pages`, `-m` | `50` | Maximum number of pages to crawl |
+
+### Setting up your API Key
+
+Prumo requires an API key from your chosen LLM provider. You can set it via **environment variable** (recommended) or via **flag**:
+
+```bash
+# Gemini (default)
+export GEMINI_API_KEY=your-key-here
+prumo fetch https://docs.example.com
+
+# Claude
+export ANTHROPIC_API_KEY=your-key-here
+prumo fetch https://docs.example.com --provider claude
+
+# Or pass it directly
+prumo fetch https://docs.example.com --api-key your-key-here
+```
+
+### Example Output
+
+The generated `llms.txt` follows this format:
+
+```markdown
+# FastAPI
+
+> Modern, fast web framework for building APIs with Python.
+
+## Getting Started
+- [Installation](https://fastapi.tiangolo.com/tutorial/): How to install and create the first endpoint.
+- [First Steps](https://fastapi.tiangolo.com/tutorial/first-steps/): Basic structure of a FastAPI application.
+
+## Request Handling
+- [Path Parameters](https://fastapi.tiangolo.com/tutorial/path-params/): Dynamic URL parameters with automatic type validation.
+```
+
+## Limitations
+
+| Limitation | Detail |
+|---|---|
+| 🚫 JavaScript-rendered sites | Sites that require JS to render return partial or empty content |
+| 📄 Large documentation | Capped at `--max-pages` pages |
+| 🤖 Output quality | Depends on the LLM and the HTML structure of the source site |
+
+## Development
+
+```bash
+git clone https://github.com/Dione-b/prumo.git
+cd prumo
+uv sync
+
+# Lint + type check + tests
 uv run ruff check .
-uv run mypy .
+uv run mypy prumo/
+uv run pytest tests/ -v
 ```
 
 ## License
 
-AGPL-3.0. See [LICENSE](LICENSE).
+MIT
