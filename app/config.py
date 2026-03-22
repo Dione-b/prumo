@@ -14,6 +14,8 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 
+from uuid import UUID
+
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -34,11 +36,12 @@ class Settings(BaseSettings):
 
     # Model Choices
     gemini_extraction_model: str = "gemini-2.5-flash"
-    gemini_embedding_model: str = "text-embedding-004"
+    gemini_embedding_model: str = "gemini-embedding-001"
     gemini_embedding_dim: int = 768
 
     # Cookbook Settings
     cookbook_auto_generation: bool = True
+    stellar_project_id: UUID | None = None
 
     # Paths
     output_dir: str = "outputs"

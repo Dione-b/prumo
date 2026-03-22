@@ -1,77 +1,119 @@
-# Prumo Lite
+# Prumo Lite - Stellar RAG Chat
 
-Automatiza a criação de prompts de implementação a partir de documentos e regras de negócio — reduzindo de 2 horas para minutos.
+> Chat with Stellar docs and SDK references, tuned for Web2 developers learning the Stellar network.
 
-## O que faz
+## The Problem
 
-1. **Ingestão de documentos** (texto e PDF) — extrai regras de negócio via Llama 3.2 e gera embeddings via Qwen3
-2. **RAG simples** — busca vetorial (pgvector) para consultar a base de conhecimento do projeto
-3. **Geração de prompt YAML** — combina regras, contexto relevante e template estruturado para agentes do Cursor IDE
+Stellar documentation is strong, but it spans many pages, SDK repositories, and ecosystem concepts that are unfamiliar to developers coming from traditional Web2 systems.
+
+Prumo Lite turns that material into a searchable knowledge base and exposes a chat endpoint that answers with retrieval-backed context instead of generic guesses.
+
+## What It Does
+
+- Crawls [developers.stellar.org/docs](https://developers.stellar.org/docs) and, on GitHub, these official repos (`.md` / `.mdx`): [stellar-core](https://github.com/stellar/stellar-core), [x402-stellar](https://github.com/stellar/x402-stellar), [stellar-docs](https://github.com/stellar/stellar-docs).
+- Ingests documents into PostgreSQL with `pgvector`.
+- Retrieves the most relevant documentation for a question.
+- Uses Gemini to synthesize answers grounded in retrieved sources.
+- Exposes a stateless `POST /chat/stellar` endpoint with source references.
 
 ## Stack
 
-| Componente | Tecnologia |
+| Component | Technology |
 |---|---|
-| **API** | FastAPI + Pydantic v2 |
-| **Banco** | PostgreSQL 15+ com pgvector |
-| **Embeddings** | Qwen3 via Ollama (local) |
-| **Extração** | Llama 3.2 via Ollama (local) |
-| **Síntese** | Gemini 2.5 Pro (cloud) |
-| **ORM** | SQLAlchemy 2.0 (async) |
+| API | FastAPI + Pydantic v2 |
+| Database | PostgreSQL 15+ with `pgvector` |
+| ORM | SQLAlchemy 2.0 async |
+| Retrieval | Gemini embeddings (`gemini-embedding-001`) + `pgvector` |
+| Synthesis | Gemini 2.5 |
+| Scraping | `httpx` + BeautifulSoup + GitHub API |
+| Tooling | `uv`, Alembic, Ruff, mypy, pytest |
 
-## Pré-requisitos
-
-- Python 3.11+
-- PostgreSQL 15+ com extensão `pgvector`
-- Ollama rodando localmente
-- Chave de API do Gemini
-
-## Setup
+## Quick Start
 
 ```bash
-# 1. Instalar dependências
 uv sync
-
-# 2. Configurar variáveis de ambiente
 cp .env.example .env
-# Editar .env com suas credenciais
-
-# 3. Executar migrações
 uv run alembic upgrade head
-
-# 4. Baixar modelos Ollama
-ollama pull llama3.2:3b
-ollama pull qwen3-embedding:0.6b
-
-# 5. Rodar
 uv run uvicorn app.main:app --reload
 ```
 
-## API Endpoints
-
-### Projects
-- `POST /projects` — Cria um projeto
-- `GET /projects` — Lista projetos
-
-### Ingestion
-- `POST /ingest/business` — Ingere texto e extrai regras de negócio
-
-### Knowledge Base
-- `POST /knowledge/documents` — Ingere documento para RAG
-- `POST /knowledge/query` — Consulta via busca vetorial + síntese Gemini
-- `DELETE /knowledge/documents/{id}` — Remove documento
-- `DELETE /knowledge/purge-all` — Limpa todos os documentos do projeto
-
-### Prompts
-- `POST /prompts/generate-cursor-yaml` — Gera prompt YAML estruturado
-- `GET /prompts/{id}` — Baixa o prompt gerado
-
-## Teste rápido
+Create or reuse the Stellar project, then ingest sources:
 
 ```bash
-uv run python scripts/test_workflow.py
+uv run python scripts/ingest_stellar_docs.py
 ```
 
-## Licença
+If you want to ingest a single source:
 
-AGPL-3.0 — Veja [LICENSE](LICENSE).
+```bash
+uv run python scripts/ingest_stellar_docs.py --source docs
+uv run python scripts/ingest_stellar_docs.py --source github
+```
+
+## API
+
+### Projects
+
+- `POST /projects`
+- `GET /projects`
+- `GET /projects/{project_id}`
+
+### Knowledge
+
+- `POST /knowledge/documents`
+- `GET /knowledge/projects/{project_id}/summary` (contagens por status; diagnostico RAG)
+- `POST /knowledge/query`
+- `DELETE /knowledge/documents/{document_id}`
+- `DELETE /knowledge/purge-all`
+
+### Chat
+
+- `POST /chat/stellar`
+
+### Cookbooks
+
+- `GET /cookbooks`
+- `POST /cookbooks/search/ui`
+- `DELETE /cookbooks/{recipe_id}`
+
+## Example Chat Request
+
+```bash
+curl -X POST http://localhost:8000/chat/stellar \
+  -H "Content-Type: application/json" \
+  -d '{
+    "question": "What is the difference between a Stellar account and a regular bank account?",
+    "session_id": "demo-session",
+    "history": []
+  }'
+```
+
+## How It Works
+
+```mermaid
+flowchart TD
+    stellarDocs[StellarDocsAndSDKs] --> crawler[StellarCrawler]
+    crawler --> ingest[KnowledgeIngestionAPI]
+    ingest --> docs[(KnowledgeDocuments)]
+    userQuestion[UserQuestion] --> embed[GeminiEmbedding]
+    embed --> retrieve[VectorSearch]
+    docs --> retrieve
+    retrieve --> synthesize[GeminiSynthesis]
+    synthesize --> chat[StellarChatResponse]
+```
+
+## Adding New Sources
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Development Checks
+
+```bash
+uv run pytest
+uv run ruff check .
+uv run mypy .
+```
+
+## License
+
+AGPL-3.0. See [LICENSE](LICENSE).

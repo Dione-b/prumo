@@ -29,7 +29,7 @@ from app.database import async_session_factory
 from app.logger import setup_logging
 from app.models.knowledge import KnowledgeDocument
 from app.models.project import Project
-from app.routers import cookbooks, knowledge, projects, test_ui
+from app.routers import chat, cookbooks, knowledge, projects, test_ui
 
 setup_logging()
 
@@ -69,6 +69,7 @@ app = FastAPI(
 
 app.include_router(projects.router)
 app.include_router(knowledge.router)
+app.include_router(chat.router)
 app.include_router(cookbooks.router)
 app.include_router(test_ui.router)
 

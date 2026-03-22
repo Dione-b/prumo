@@ -26,7 +26,9 @@ def _extract_pdf_text(path: str) -> str:
 
 
 async def process_document_to_cookbooks(document_id: UUID) -> None:
-    """Carrega o texto, roda embeddings do doc, gera os cookbooks via Gemini e depois embedding das receitas."""
+    """
+    Carrega o texto, gera embedding do documento e extrai cookbooks via Gemini.
+    """
 
     # 1. Busca documento e valida conteúdo
     async with async_session_maker() as db:
@@ -77,7 +79,13 @@ async def process_document_to_cookbooks(document_id: UUID) -> None:
         # 4. Processar receitas gerando Embedding individual para busca semântica
         for recipe_data in extracted.recipes:
             # Concatena titulo + descrição pra ser o kernel de busca
-            search_text = f"Title: {recipe_data.title}\nDesc: {recipe_data.description}\nPrerequisites: {recipe_data.prerequisites}"
+            search_text = "\n".join(
+                [
+                    f"Title: {recipe_data.title}",
+                    f"Desc: {recipe_data.description}",
+                    f"Prerequisites: {recipe_data.prerequisites}",
+                ]
+            )
             recipe_emb = await generate_embedding(search_text)
 
             new_recipe = CookbookRecipe(
@@ -109,9 +117,9 @@ async def process_document_to_cookbooks(document_id: UUID) -> None:
             await db.commit()
 
         logger.info(
-            "document_transformed_to_cookbooks",
-            doc_id=str(document_id),
-            recipes=len(recipes_to_insert),
+            "document_transformed_to_cookbooks doc_id=%s recipes=%s",
+            document_id,
+            len(recipes_to_insert),
         )
 
     except Exception as exc:

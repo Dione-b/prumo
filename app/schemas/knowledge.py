@@ -25,6 +25,22 @@ class DocumentIngestRequest(BaseModel):
     title: str = Field(..., max_length=255)
     content: str | None = None
     source_type: str
+    source_url: str | None = Field(default=None, max_length=2048)
+
+
+class KnowledgeQueryRequest(BaseModel):
+    project_id: UUID
+    query: str = Field(..., min_length=1, max_length=4000)
+    limit: int = Field(default=5, ge=1, le=10)
+
+
+class KnowledgeProjectSummary(BaseModel):
+    """Contagens por status para diagnosticar ingestao e pipeline em background."""
+
+    project_id: UUID
+    total_documents: int
+    by_status: dict[str, int]
+    ready_with_embedding: int
 
 
 class AnswerCitation(BaseModel):

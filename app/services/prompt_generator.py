@@ -25,6 +25,7 @@ Invariantes:
 
 from __future__ import annotations
 
+from typing import Literal
 from uuid import UUID
 
 import structlog
@@ -89,7 +90,9 @@ class PromptGeneratorService:
         )
 
         # 4. Derivar confidence
-        confidence = "HIGH" if rag_context else "MEDIUM"
+        confidence: Literal["HIGH", "MEDIUM", "LOW"] = (
+            "HIGH" if rag_context else "MEDIUM"
+        )
         if warnings:
             confidence = "LOW"
 

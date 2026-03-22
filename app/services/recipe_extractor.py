@@ -71,7 +71,7 @@ async def extract_recipes_from_text(raw_text: str) -> RecipeExtractionResponse:
 
 
 async def generate_embedding(text: str) -> list[float]:
-    """Gera um único vetor de embedding via text-embedding-004."""
+    """Gera um único vetor de embedding via Gemini (embedContent)."""
     if not text.strip():
         # Fallback to zero vector to avoid crashing or return specific exception
         return [0.0] * settings.gemini_embedding_dim
