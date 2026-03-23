@@ -42,13 +42,35 @@ URL or GitHub repo
 
 ## Installation
 
+Prumo is a CLI tool. The recommended way to install it is with [pipx](https://pipx.pypa.io), which installs it in an isolated environment and makes it globally available in your terminal:
+
+```bash
+pipx install prumo
+```
+
+> **Don't have pipx?** Install it first:
+>
+> ```bash
+> # macOS
+> brew install pipx && pipx ensurepath
+>
+> # Ubuntu / Debian
+> sudo apt install pipx && pipx ensurepath
+>
+> # Windows
+> scoop install pipx
+> ```
+
+**Alternative — pip inside a virtual environment:**
+
 ```bash
 pip install prumo
 ```
 
+**Alternative — uv:**
+
 ```bash
-# or with uv
-uv add prumo
+uv tool install prumo
 ```
 
 ## Quick Start
