@@ -3,14 +3,14 @@
 Two operating modes:
 - crawl()        → Static HTTP (httpx + BeautifulSoup), for sites that serve plain HTML.
 - crawl_github() → GitHub Contents API, for repositories with docs in .md / .mdx.
-                   Bypasses the JS-Wall of sites like Docusaurus, VitePress, etc.
+                   Bypasses the JS-Wall of sites like Docusaurus, VitePress, Next.js.
 
 GitHub mode intelligence:
 - Automatically ignores configuration/infrastructure directories.
 - Auto-detects the docs directory when the user provides only the repo root URL.
 - Prioritizes files with more actual text content before sending them to the exporter.
 - Automatic fallback to individual file fetch when the `content` field is empty
-  in the directory listing (normal behavior of the GitHub API for large directories).
+  in the directory listing (normal GitHub API behavior for large directories).
 - Transforms GitHub URLs to the published docs URL when --docs-base-url is provided.
 
 Both modes return List[Page] — identical interface for the exporter.
@@ -56,6 +56,8 @@ DOCS_DIR_CANDIDATES = (
     "pages", "guide", "guides", "wiki",
     "knowledge", "manual", "handbook", "reference",
 )
+
+ProgressCallback = Callable[[int, str], None]
 
 
 @dataclass
@@ -115,7 +117,7 @@ def _extract_title(soup: BeautifulSoup) -> str:
 
 def _fetch_page(client: httpx.Client, url: str) -> str | None:
     """GET with retries. Returns HTML or None on failure."""
-    for attempt in range(MAX_RETRIES + 1):
+    for _ in range(MAX_RETRIES + 1):
         try:
             response = client.get(url, follow_redirects=True)
             response.raise_for_status()
@@ -128,7 +130,7 @@ def _fetch_page(client: httpx.Client, url: str) -> str | None:
 def crawl(
     root_url: str,
     max_pages: int = 50,
-    on_progress: Callable[[int, str], None] | None = None,
+    on_progress: ProgressCallback | None = None,
 ) -> list[Page]:
     """Crawl a static documentation site starting from the root URL.
 
@@ -190,9 +192,7 @@ def _parse_github_url(url: str) -> tuple[str, str, str]:
 
     owner = parts[0]
     repo = parts[1]
-    subpath = ""
-    if len(parts) > 4 and parts[2] == "tree":
-        subpath = "/".join(parts[4:])
+    subpath = "/".join(parts[4:]) if len(parts) > 4 and parts[2] == "tree" else ""
 
     return owner, repo, subpath
 
@@ -206,7 +206,8 @@ def _is_ignored_file(filename: str) -> bool:
     return stem in GITHUB_IGNORED_FILENAMES
 
 
-def _decode_base64_content(encoded: str, name: str) -> str | None:
+def _decode_base64_content(encoded: str) -> str | None:
+    """Decodes a base64 string returned by the GitHub API."""
     try:
         return base64.b64decode(encoded.replace("\n", "")).decode("utf-8")
     except Exception:
@@ -217,7 +218,6 @@ def _fetch_file_individually(
     client: httpx.Client,
     api_url: str,
     headers: dict[str, str],
-    name: str,
 ) -> str | None:
     """Fetch a file individually when content is missing from the directory listing.
 
@@ -227,55 +227,32 @@ def _fetch_file_individually(
     try:
         response = client.get(api_url, headers=headers)
         response.raise_for_status()
-        data = response.json()
-        encoded = data.get("content", "")
-        if not encoded:
-            return None
-        return _decode_base64_content(encoded, name)
+        encoded = response.json().get("content", "")
+        return _decode_base64_content(encoded) if encoded else None
     except (httpx.HTTPError, httpx.TimeoutException):
         return None
 
 
-def _transform_to_docs_url(
-    html_url: str,
-    subpath: str,
-    docs_base_url: str,
-) -> str:
+def _transform_to_docs_url(html_url: str, subpath: str, docs_base_url: str) -> str:
     """Transforms a GitHub blob URL to the published documentation URL.
-
-    Extracts the relative path of the file within the docs subdirectory and
-    combines it with the published documentation base URL.
 
     Example:
         html_url:      https://github.com/stellar/stellar-docs/blob/main/docs/build/setup.mdx
         subpath:       docs
         docs_base_url: https://developers.stellar.org/docs
         result:        https://developers.stellar.org/docs/build/setup
-
-    Args:
-        html_url: GitHub file URL (blob/main/... format).
-        subpath: Subdirectory of the repo that was scanned (e.g. "docs").
-        docs_base_url: Base URL of the published documentation without trailing slash.
-
-    Returns:
-        URL of the page in the published documentation, without file extension.
     """
-    # Extract path after blob/main/ (or blob/master/ etc.)
-    # e.g. "docs/build/setup.mdx"
     match = re.search(r"/blob/[^/]+/(.+)$", html_url)
     if not match:
         return html_url
 
-    file_path = match.group(1)  # "docs/build/setup.mdx"
+    file_path = match.group(1)
 
-    # Strip the scanned subpath prefix
-    # e.g. subpath="docs" → strip "docs/" → "build/setup.mdx"
     if subpath:
         prefix = subpath.rstrip("/") + "/"
         if file_path.startswith(prefix):
             file_path = file_path[len(prefix):]
 
-    # Strip .md or .mdx extension
     for ext in (".mdx", ".md"):
         if file_path.endswith(ext):
             file_path = file_path[: -len(ext)]
@@ -291,10 +268,11 @@ def _detect_docs_subpath(
     headers: dict[str, str],
 ) -> str:
     """Inspects the top level of the repo and auto-detects the docs directory."""
-    api_url = f"https://api.github.com/repos/{owner}/{repo}/contents/"
-
     try:
-        response = client.get(api_url, headers=headers)
+        response = client.get(
+            f"https://api.github.com/repos/{owner}/{repo}/contents/",
+            headers=headers,
+        )
         response.raise_for_status()
     except (httpx.HTTPError, httpx.TimeoutException):
         return ""
@@ -304,18 +282,16 @@ def _detect_docs_subpath(
         return ""
 
     dir_names = {item["name"].lower() for item in items if item.get("type") == "dir"}
-
-    for candidate in DOCS_DIR_CANDIDATES:
-        if candidate in dir_names:
-            return candidate
-
-    return ""
+    return next((c for c in DOCS_DIR_CANDIDATES if c in dir_names), "")
 
 
 def _score_markdown_content(raw: str) -> int:
-    """Calculates the volume of actual narrative text in a Markdown file."""
-    text = raw
-    text = re.sub(r"^---[\s\S]*?---\s*", "", text, count=1)
+    """Calculates the volume of actual narrative text in a Markdown file.
+
+    Strips frontmatter, code blocks, MDX imports, and JSX components to
+    return a character count of meaningful prose. Higher score = richer content.
+    """
+    text = re.sub(r"^---[\s\S]*?---\s*", "", raw, count=1)
     text = re.sub(r"```[\s\S]*?```", "", text)
     text = re.sub(r"^(import|export)\s+.*$", "", text, flags=re.MULTILINE)
     text = re.sub(r"<[A-Z][^>]*/>", "", text)
@@ -349,7 +325,7 @@ def _list_github_files(
     headers: dict[str, str],
     max_files: int,
     collected: list[_GitHubFile],
-    on_progress: Callable[[int, str], None] | None = None,
+    on_progress: ProgressCallback | None = None,
 ) -> None:
     """Recursively lists .md/.mdx files and collects their content.
 
@@ -360,10 +336,11 @@ def _list_github_files(
     if len(collected) >= max_files:
         return
 
-    api_url = f"https://api.github.com/repos/{owner}/{repo}/contents/{path}"
-
     try:
-        response = client.get(api_url, headers=headers)
+        response = client.get(
+            f"https://api.github.com/repos/{owner}/{repo}/contents/{path}",
+            headers=headers,
+        )
         response.raise_for_status()
     except (httpx.HTTPError, httpx.TimeoutException):
         return
@@ -380,12 +357,11 @@ def _list_github_files(
         name: str = item.get("name", "")
 
         if item_type == "dir":
-            if _is_ignored_dir(name):
-                continue
-            _list_github_files(
-                client, owner, repo, item["path"],
-                headers, max_files, collected, on_progress,
-            )
+            if not _is_ignored_dir(name):
+                _list_github_files(
+                    client, owner, repo, item["path"],
+                    headers, max_files, collected, on_progress,
+                )
 
         elif item_type == "file":
             if not any(name.lower().endswith(ext) for ext in GITHUB_MD_EXTENSIONS):
@@ -393,28 +369,24 @@ def _list_github_files(
             if _is_ignored_file(name):
                 continue
 
-            # Attempt 1: inline content from directory listing
             encoded: str = item.get("content", "")
-            if encoded:
-                decoded = _decode_base64_content(encoded, name)
-            else:
-                # Attempt 2: individual file fetch
-                decoded = _fetch_file_individually(
-                    client, item["url"], headers, name
-                )
+            decoded = (
+                _decode_base64_content(encoded)
+                if encoded
+                else _fetch_file_individually(client, item["url"], headers)
+            )
 
             if not decoded or not decoded.strip():
                 continue
 
-            score = _score_markdown_content(decoded)
             collected.append(_GitHubFile(
                 name=name,
                 html_url=item.get("html_url", ""),
                 content=decoded,
-                text_score=score,
+                text_score=_score_markdown_content(decoded),
             ))
 
-            if on_progress is not None:
+            if on_progress:
                 on_progress(len(collected), name)
 
 
@@ -423,7 +395,7 @@ def crawl_github(
     github_token: str,
     max_pages: int = 50,
     docs_base_url: str | None = None,
-    on_progress: Callable[[int, str], None] | None = None,
+    on_progress: ProgressCallback | None = None,
 ) -> list[Page]:
     """Read .md/.mdx files from a GitHub repository via the Contents API.
 
@@ -455,9 +427,7 @@ def crawl_github(
 
     with httpx.Client(timeout=TIMEOUT_SECONDS) as client:
         if not subpath:
-            detected = _detect_docs_subpath(client, owner, repo, headers)
-            if detected:
-                subpath = detected
+            subpath = _detect_docs_subpath(client, owner, repo, headers)
 
         _list_github_files(
             client, owner, repo, subpath,
@@ -469,16 +439,13 @@ def crawl_github(
 
     collected.sort(key=lambda f: f.text_score, reverse=True)
 
-    pages: list[Page] = []
-    for file in collected:
-        title = _extract_title_from_markdown(file.content, file.name)
-
-        # Map GitHub URL to the published docs URL if provided
-        if docs_base_url:
-            url = _transform_to_docs_url(file.html_url, subpath, docs_base_url)
-        else:
-            url = file.html_url
-
-        pages.append(Page(title=title, url=url, content=file.content))
-
-    return pages
+    return [
+        Page(
+            title=_extract_title_from_markdown(file.content, file.name),
+            url=_transform_to_docs_url(file.html_url, subpath, docs_base_url)
+            if docs_base_url
+            else file.html_url,
+            content=file.content,
+        )
+        for file in collected
+    ]

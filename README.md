@@ -7,7 +7,7 @@
   <p align="center">
     <a href="https://pypi.org/project/prumo"><img alt="PyPI" src="https://img.shields.io/pypi/v/prumo?color=0ea5e9&labelColor=1e293b"></a>
     <a href="https://pypi.org/project/prumo"><img alt="Python" src="https://img.shields.io/pypi/pyversions/prumo?color=0ea5e9&labelColor=1e293b"></a>
-    <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/Dione-b/prumo?color=0ea5e9&labelColor=1e293b"></a>
+    <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-0ea5e9?labelColor=1e293b"></a>
     <a href="https://github.com/Dione-b/prumo/actions"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/Dione-b/prumo/ci.yml?label=CI&color=0ea5e9&labelColor=1e293b"></a>
   </p>
 </p>
@@ -122,7 +122,6 @@ Crawls a documentation site and generates `llms.txt`.
 | `--github`              | `false`    | Use the GitHub API to read `.md`/`.mdx` files directly |
 | `--github-token`        | env var    | GitHub Personal Access Token                           |
 | `--docs-base-url`, `-d` | —          | Remap GitHub blob links to the published docs URL      |
-| `--verbose`, `-v`       | `false`    | Show detailed logs                                     |
 
 ### Credential resolution order
 
