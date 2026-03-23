@@ -71,7 +71,7 @@ def _call_gemini(prompt: str, system: str, api_key: str) -> str:
 
     genai.configure(api_key=api_key)  # type: ignore[attr-defined]
     model = genai.GenerativeModel(  # type: ignore[attr-defined]
-        model_name="gemini-2.0-flash",
+        model_name="gemini-2.5-flash",
         system_instruction=system,
     )
     response = model.generate_content(prompt)
