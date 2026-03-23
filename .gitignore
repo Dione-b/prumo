@@ -12,26 +12,20 @@ __pycache__/
 env/
 venv/
 .venv/
-pip-log.txt
-pip-delete-this-directory.txt
-.toast
-+.vulture
-*.manifest
-*.spec
+*.egg-info/
+dist/
+build/
 
 # Tools
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
-.ipynb_checkpoints
 
 # OS & IDEs
 .DS_Store
 .vscode/
 .idea/
 
-# Project specific
-/logs/
-/tmp/
-
-/outputs/
+# Project
+/output/
+/test-out/

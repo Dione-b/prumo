@@ -1,57 +1,41 @@
 [project]
 name = "prumo"
 version = "0.1.0"
-description = "Context orchestration engine for agentic IDEs"
+description = "Convert any docs site into llms.txt for AI agents"
+readme = "README.md"
 requires-python = ">=3.11"
-
+license = "MIT"
 dependencies = [
-    "fastapi>=0.111.0",
-    "uvicorn[standard]>=0.29.0",
-    "sqlalchemy[asyncio]>=2.0.0",
-    "alembic>=1.13.0",
-    "asyncpg>=0.29.0",
-    "psycopg2-binary>=2.9.0",
-    "pydantic>=2.7.0",
-    "pydantic-settings>=2.3.0",
-    "google-genai>=1.2.0",
-    "pgvector>=0.3.0",
-    "python-dotenv>=1.0.0",
-    "structlog>=25.5.0",
-    "tenacity>=9.1.4",
-    "jinja2>=3.1.6",
-    "python-multipart>=0.0.22",
-    "numpy>=1.26.0",
-    "pypdf>=6.7.3",
-    "click>=8.1.0",
+  "httpx>=0.27",
+  "beautifulsoup4>=4.12",
+  "typer>=0.12",
+  "rich>=13",
+  "python-dotenv>=1.0",
+  "google-generativeai>=0.8",
+  "anthropic>=0.30",
 ]
+
+[project.scripts]
+prumo = "prumo.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [dependency-groups]
 dev = [
-    "pytest>=8.0.0",
-    "pytest-asyncio>=0.23.0",
-    "httpx>=0.27.0",
-    "ruff>=0.15.2",
-    "mypy>=1.19.1",
-    "pytest-mock>=3.15.1",
-    "types-pyyaml>=6.0.12.20250915",
+  "pytest",
+  "pytest-asyncio",
+  "ruff",
+  "mypy",
+  "respx",
 ]
 
 [tool.ruff]
 line-length = 88
-target-version = "py311"
-
-[tool.ruff.lint]
-select = ["E", "W", "F", "I", "N", "UP"]
 
 [tool.mypy]
-python_version = "3.11"
 strict = true
-ignore_missing_imports = true
-warn_unused_ignores = false
 
-[[tool.mypy.overrides]]
-module = "google.*"
-ignore_missing_imports = true
-
-[project.scripts]
-prumo = "app.cli:main"
+[tool.pytest.ini_options]
+testpaths = ["tests"]
