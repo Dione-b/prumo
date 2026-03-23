@@ -1,7 +1,7 @@
-"""Exporter que converte páginas de documentação em llms.txt via LLM.
+"""Exporter that converts documentation pages into llms.txt via an LLM.
 
-Recebe a lista de páginas do crawler, monta um prompt consolidado,
-chama a LLM escolhida (Gemini ou Claude) e retorna a string bruta.
+Receives the page list from the crawler, builds a consolidated prompt,
+calls the chosen LLM (Gemini or Claude), and returns the raw string.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from prumo.crawler import Page
 
 logger = logging.getLogger(__name__)
 
-# ~80k tokens ≈ 320k caracteres (estimativa conservadora de 4 chars/token)
+# ~80k tokens ≈ 320k characters (conservative estimate of 4 chars/token)
 MAX_CONTENT_CHARS = 320_000
 
 SYSTEM_PROMPT = (
@@ -40,7 +40,7 @@ SYSTEM_PROMPT = (
 
 
 def _build_pages_content(pages: list[Page]) -> str:
-    """Monta o conteúdo das páginas para o prompt, truncando se necessário."""
+    """Builds the pages content string for the prompt, truncating if necessary."""
     parts: list[str] = []
     total_chars = 0
 
@@ -54,7 +54,7 @@ def _build_pages_content(pages: list[Page]) -> str:
 
         if total_chars > MAX_CONTENT_CHARS:
             logger.warning(
-                "Conteúdo truncado: %d páginas de %d incluídas (limite de ~80k tokens)",
+                "Content truncated: %d of %d pages included (limit ~80k tokens)",
                 i,
                 len(pages),
             )
@@ -66,8 +66,8 @@ def _build_pages_content(pages: list[Page]) -> str:
 
 
 def _call_gemini(prompt: str, system: str, api_key: str) -> str:
-    """Chama a API do Google Gemini."""
-    import google.generativeai as genai  # type: ignore[import-untyped]
+    """Calls the Google Gemini API."""
+    import google.generativeai as genai
 
     genai.configure(api_key=api_key)  # type: ignore[attr-defined]
     model = genai.GenerativeModel(  # type: ignore[attr-defined]
@@ -79,7 +79,7 @@ def _call_gemini(prompt: str, system: str, api_key: str) -> str:
 
 
 def _call_claude(prompt: str, system: str, api_key: str) -> str:
-    """Chama a API do Anthropic Claude."""
+    """Calls the Anthropic Claude API."""
     import anthropic
 
     client = anthropic.Anthropic(api_key=api_key)
@@ -89,7 +89,7 @@ def _call_claude(prompt: str, system: str, api_key: str) -> str:
         system=system,
         messages=[{"role": "user", "content": prompt}],
     )
-    # O response contém blocos de conteúdo; extraímos o texto
+    # Response contains content blocks; extract the text from the first one
     return message.content[0].text  # type: ignore[union-attr]
 
 
@@ -98,18 +98,18 @@ def export_llms_txt(
     provider: Literal["gemini", "claude"],
     api_key: str,
 ) -> str:
-    """Exporta páginas de documentação para formato llms.txt via LLM.
+    """Exports documentation pages to llms.txt format via an LLM.
 
     Args:
-        pages: Lista de páginas com título, URL e conteúdo.
-        provider: Provedor de LLM ('gemini' ou 'claude').
-        api_key: Chave de API do provedor.
+        pages: List of pages with title, URL, and content.
+        provider: LLM provider ('gemini' or 'claude').
+        api_key: API key for the provider.
 
     Returns:
-        String formatada em Markdown no padrão llms.txt.
+        Markdown-formatted string in llms.txt format.
 
     Raises:
-        ValueError: Se o provider não for suportado.
+        ValueError: If the provider is not supported.
     """
     if not pages:
         return ""
@@ -122,5 +122,5 @@ def export_llms_txt(
     if provider == "claude":
         return _call_claude(prompt, SYSTEM_PROMPT, api_key)
 
-    msg = f"Provider não suportado: {provider}"
+    msg = f"Unsupported provider: {provider}"
     raise ValueError(msg)
