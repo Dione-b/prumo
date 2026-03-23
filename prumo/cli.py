@@ -1,21 +1,21 @@
-"""CLI do Prumo — entry point que orquestra crawler e exporter.
+"""Prumo CLI — entry point that orchestrates crawler and exporter.
 
-Único módulo que faz IO de disco. Valida inputs, exibe progresso
-com Rich e resolve API keys.
+Only module that does disk IO. Validates inputs, shows progress
+with Rich and resolves API keys.
 
-Comandos disponíveis:
-  prumo init   → wizard interativo que cria o .env com as credenciais necessárias
-  prumo fetch  → crawlea documentação e gera llms.txt
+Available commands:
+  prumo init   → interactive wizard that creates .env with required credentials
+  prumo fetch  → crawls documentation and generates llms.txt
 
-Modos de operação do fetch:
-  - Padrão:    crawling HTTP estático (httpx + BeautifulSoup)
-  - --github:  leitura via GitHub Contents API (.md/.mdx), contorna JS-Wall
+Fetch operation modes:
+  - Standard: static HTTP crawling (httpx + BeautifulSoup)
+  - --github: reads via GitHub Contents API (.md/.mdx), bypasses JS-Wall
 
-Resolução de credenciais (ordem de prioridade):
-  1. Flag CLI        (--api-key, --github-token)
-  2. Arquivo .env    (carregado automaticamente do diretório atual)
-  3. Variável de ambiente do shell
-  4. Erro com instrução clara — rode `prumo init` para configurar
+Credential resolution (priority order):
+  1. CLI Flag        (--api-key, --github-token)
+  2. .env file       (loaded automatically from current directory)
+  3. Shell env var
+  4. Error with clear instructions — run `prumo init` to configure
 """
 
 from __future__ import annotations
@@ -57,12 +57,12 @@ def _callback() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Helpers de resolução de credenciais
+# Credential resolution helpers
 # ---------------------------------------------------------------------------
 
 
 def _resolve_api_key(provider: str, api_key_flag: str | None) -> str:
-    """Resolve a API key: flag CLI → variável de ambiente → erro."""
+    """Resolves the API key: CLI flag → env var → error."""
     if api_key_flag:
         return api_key_flag
 
@@ -71,17 +71,17 @@ def _resolve_api_key(provider: str, api_key_flag: str | None) -> str:
         return value
 
     console.print(
-        f"\n[bold red]Erro:[/] API key não encontrada para o provider '[cyan]{provider}[/cyan]'.\n\n"
-        f"  Configure rapidamente rodando:\n"
+        f"\n[bold red]Error:[/] API key not found for provider '[cyan]{provider}[/cyan]'.\n\n"
+        f"  Quickly configure it by running:\n"
         f"    [bold green]prumo init[/bold green]\n\n"
-        f"  Ou adicione manualmente ao [bold].env[/bold]:\n"
-        f"    [green]{env_var}=sua-chave-aqui[/green]"
+        f"  Or manually add to [bold].env[/bold]:\n"
+        f"    [green]{env_var}=your-key-here[/green]"
     )
     raise typer.Exit(code=1)
 
 
 def _resolve_github_token(github_token_flag: str | None) -> str:
-    """Resolve o GitHub token: flag CLI → GITHUB_TOKEN env → erro."""
+    """Resolves the GitHub token: CLI flag → GITHUB_TOKEN env → error."""
     if github_token_flag:
         return github_token_flag
 
@@ -89,24 +89,24 @@ def _resolve_github_token(github_token_flag: str | None) -> str:
         return value
 
     console.print(
-        "\n[bold red]Erro:[/] GitHub token não encontrado.\n\n"
-        "  Configure rapidamente rodando:\n"
+        "\n[bold red]Error:[/] GitHub token not found.\n\n"
+        "  Quickly configure it by running:\n"
         "    [bold green]prumo init[/bold green]\n\n"
-        "  Ou adicione manualmente ao [bold].env[/bold]:\n"
-        "    [green]GITHUB_TOKEN=seu-token-aqui[/green]"
+        "  Or manually add to [bold].env[/bold]:\n"
+        "    [green]GITHUB_TOKEN=your-token-here[/green]"
     )
     raise typer.Exit(code=1)
 
 
 def _validate_url(url: str) -> None:
-    """Valida que a URL é acessível antes de crawlear."""
+    """Validates that the URL is accessible before crawling."""
     try:
         with httpx.Client(timeout=10) as client:
             response = client.head(url, follow_redirects=True)
             response.raise_for_status()
     except (httpx.HTTPError, httpx.TimeoutException) as exc:
-        console.print(f"[bold red]Erro:[/] URL inacessível: {url}")
-        console.print(f"  Detalhe: {exc}")
+        console.print(f"[bold red]Error:[/] URL inaccessible: {url}")
+        console.print(f"  Detail: {exc}")
         raise typer.Exit(code=1) from exc
 
 
@@ -115,16 +115,16 @@ def _run_with_progress(
     total: int,
     crawl_fn: Callable[..., list[Page]],
 ) -> list[Page]:
-    """Executa uma função de crawl exibindo uma barra de progresso Rich.
+    """Executes a crawl function displaying a Rich progress bar.
 
     Args:
-        description: Texto exibido na barra de progresso.
-        total: Número máximo de itens (teto da barra).
-        crawl_fn: Função de crawl parcialmente aplicada — deve aceitar
-                  `on_progress` como único argumento pendente.
+        description: Text displayed on the progress bar.
+        total: Maximum number of items (bar ceiling).
+        crawl_fn: Partially applied crawl function — must accept
+                  `on_progress` as the only pending argument.
 
     Returns:
-        Lista de páginas retornada pelo crawler.
+        List of pages returned by the crawler.
     """
     with Progress(
         SpinnerColumn(),
@@ -147,7 +147,7 @@ def _run_with_progress(
 
 
 # ---------------------------------------------------------------------------
-# Comando: prumo init
+# Command: prumo init
 # ---------------------------------------------------------------------------
 
 
@@ -155,142 +155,142 @@ def _run_with_progress(
 def init(
     force: Annotated[
         bool,
-        typer.Option("--force", "-f", help="Sobrescreve o .env existente sem perguntar"),
+        typer.Option("--force", "-f", help="Overwrites the existing .env without prompting"),
     ] = False,
 ) -> None:
-    """Configura as credenciais do Prumo criando um arquivo .env interativamente."""
+    """Configures Prumo credentials by interactively creating a .env file."""
 
     env_path = Path.cwd() / ".env"
 
     console.print()
     console.print(Panel(
-        "[bold cyan]Prumo[/bold cyan] — Configuração inicial\n\n"
-        "Este wizard vai criar um arquivo [bold].env[/bold] com suas credenciais.\n"
-        "As chaves são armazenadas [bold]localmente[/bold] e nunca saem da sua máquina.",
+        "[bold cyan]Prumo[/bold cyan] — Initial Setup\n\n"
+        "This wizard will create a [bold].env[/bold] file with your credentials.\n"
+        "Keys are stored [bold]locally[/bold] and never leave your machine.",
         expand=False,
     ))
     console.print()
 
     if env_path.exists() and not force:
         if not typer.confirm(
-            f"  O arquivo .env já existe em {env_path}. Deseja sobrescrevê-lo?",
+            f"  The .env file already exists at {env_path}. Do you want to overwrite it?",
             default=False,
         ):
             console.print(
-                "\n[yellow]Operação cancelada.[/yellow] "
-                "Use [bold]--force[/bold] para sobrescrever sem confirmação.\n"
+                "\n[yellow]Operation cancelled.[/yellow] "
+                "Use [bold]--force[/bold] to overwrite without confirmation.\n"
             )
             raise typer.Exit()
         console.print()
 
-    lines: list[str] = ["# Prumo — credenciais\n# Gerado por `prumo init`\n"]
+    lines: list[str] = ["# Prumo — credentials\n# Generated by `prumo init`\n"]
     step = 1
 
     # ------------------------------------------------------------------
     # LLM Provider
     # ------------------------------------------------------------------
-    console.print(f"[bold]{step}. Provider de LLM[/bold]")
-    console.print("   Qual provider você quer usar para gerar o llms.txt?\n")
+    console.print(f"[bold]{step}. LLM Provider[/bold]")
+    console.print("   Which provider do you want to use to generate the llms.txt?\n")
     step += 1
 
     provider_choice = typer.prompt(
         "   Provider",
         default="gemini",
-        prompt_suffix=" [gemini/claude/ambos]: ",
+        prompt_suffix=" [gemini/claude/both]: ",
         show_default=False,
     ).strip().lower()
 
-    while provider_choice not in ("gemini", "claude", "ambos"):
-        console.print("   [red]Opção inválida.[/red] Digite gemini, claude ou ambos.")
+    while provider_choice not in ("gemini", "claude", "both"):
+        console.print("   [red]Invalid option.[/red] Type gemini, claude or both.")
         provider_choice = typer.prompt(
             "   Provider",
             default="gemini",
-            prompt_suffix=" [gemini/claude/ambos]: ",
+            prompt_suffix=" [gemini/claude/both]: ",
             show_default=False,
         ).strip().lower()
 
     console.print()
 
-    if provider_choice in ("gemini", "ambos"):
+    if provider_choice in ("gemini", "both"):
         console.print(f"[bold]{step}. Gemini API Key[/bold]")
-        console.print("   Obtenha em: [link]https://aistudio.google.com/app/apikey[/link]\n")
+        console.print("   Get it from: [link]https://aistudio.google.com/app/apikey[/link]\n")
         gemini_key = typer.prompt("   GEMINI_API_KEY", hide_input=True).strip()
         lines.append(f"\n# Google Gemini\nGEMINI_API_KEY={gemini_key}")
         step += 1
         console.print()
 
-    if provider_choice in ("claude", "ambos"):
+    if provider_choice in ("claude", "both"):
         console.print(f"[bold]{step}. Anthropic API Key[/bold]")
-        console.print("   Obtenha em: [link]https://console.anthropic.com/settings/keys[/link]\n")
+        console.print("   Get it from: [link]https://console.anthropic.com/settings/keys[/link]\n")
         anthropic_key = typer.prompt("   ANTHROPIC_API_KEY", hide_input=True).strip()
         lines.append(f"\n# Anthropic Claude\nANTHROPIC_API_KEY={anthropic_key}")
         step += 1
         console.print()
 
     # ------------------------------------------------------------------
-    # GitHub Token (opcional)
+    # GitHub Token (optional)
     # ------------------------------------------------------------------
     console.print(
         f"[bold]{step}. GitHub Token[/bold] "
-        "[dim](opcional — necessário apenas para --github)[/dim]"
+        "[dim](optional — only required for --github)[/dim]"
     )
-    console.print("   Usado para ler .md/.mdx diretamente do repositório GitHub.")
+    console.print("   Used to read .md/.mdx directly from the GitHub repository.")
     console.print(
-        "   Obtenha em: [link]https://github.com/settings/tokens[/link] "
-        "(escopo: repo ou public_repo)\n"
+        "   Get it from: [link]https://github.com/settings/tokens[/link] "
+        "(scope: repo or public_repo)\n"
     )
 
-    if typer.confirm("   Deseja configurar o GitHub token agora?", default=True):
+    if typer.confirm("   Do you want to configure the GitHub token now?", default=True):
         console.print()
         github_token = typer.prompt("   GITHUB_TOKEN", hide_input=True).strip()
-        lines.append(f"\n# GitHub (necessário para --github)\nGITHUB_TOKEN={github_token}")
+        lines.append(f"\n# GitHub (required for --github)\nGITHUB_TOKEN={github_token}")
 
     console.print()
     env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     console.print(Panel(
-        f"[bold green]✅ .env criado com sucesso![/bold green]\n\n"
-        f"  Localização: [cyan]{env_path}[/cyan]\n\n"
-        f"  Próximo passo:\n"
-        f"    [bold]prumo fetch <url-da-docs>[/bold]\n\n"
-        f"  Com GitHub mode:\n"
-        f"    [bold]prumo fetch <url-do-repo> --github[/bold]",
+        f"[bold green]✅ .env successfully created![/bold green]\n\n"
+        f"  Location: [cyan]{env_path}[/cyan]\n\n"
+        f"  Next step:\n"
+        f"    [bold]prumo fetch <docs-url>[/bold]\n\n"
+        f"  With GitHub mode:\n"
+        f"    [bold]prumo fetch <repo-url> --github[/bold]",
         expand=False,
     ))
     console.print()
 
 
 # ---------------------------------------------------------------------------
-# Comando: prumo fetch
+# Command: prumo fetch
 # ---------------------------------------------------------------------------
 
 
 @app.command()
 def fetch(
-    url: Annotated[str, typer.Argument(help="URL da documentação ou repositório GitHub")],
+    url: Annotated[str, typer.Argument(help="Documentation URL or GitHub repository")],
     output: Annotated[
-        str, typer.Option("--output", "-o", help="Diretório de saída")
+        str, typer.Option("--output", "-o", help="Output directory")
     ] = "./output",
     provider: Annotated[
         str,
-        typer.Option("--provider", "-p", help="LLM provider: gemini ou claude"),
+        typer.Option("--provider", "-p", help="LLM provider: gemini or claude"),
     ] = "gemini",
     api_key: Annotated[
         str | None,
-        typer.Option("--api-key", "-k", help="API key do provider LLM"),
+        typer.Option("--api-key", "-k", help="LLM provider API key"),
     ] = None,
     max_pages: Annotated[
         int,
-        typer.Option("--max-pages", "-m", help="Máximo de páginas/arquivos a processar"),
+        typer.Option("--max-pages", "-m", help="Maximum pages/files to process"),
     ] = 50,
     github: Annotated[
         bool,
         typer.Option(
             "--github",
             help=(
-                "Usa a GitHub Contents API para ler .md/.mdx do repositório. "
-                "Ideal para sites com JS-Wall (Docusaurus, VitePress, Next.js). "
-                "Requer GITHUB_TOKEN ou --github-token."
+                "Uses the GitHub Contents API to read .md/.mdx from the repository. "
+                "Ideal for sites with JS-Wall (Docusaurus, VitePress, Next.js). "
+                "Requires GITHUB_TOKEN or --github-token."
             ),
         ),
     ] = False,
@@ -303,9 +303,9 @@ def fetch(
         typer.Option(
             "--docs-base-url", "-d",
             help=(
-                "URL base da documentação publicada. Quando fornecida, os links no "
-                "llms.txt apontarão para o site da docs em vez do código-fonte no GitHub. "
-                "Exemplo: --docs-base-url https://developers.stellar.org/docs"
+                "Base URL of the published documentation. When provided, links in "
+                "the llms.txt will point to the docs site instead of the GitHub source. "
+                "Example: --docs-base-url https://developers.stellar.org/docs"
             ),
         ),
     ] = None,
@@ -313,25 +313,25 @@ def fetch(
     """Fetch documentation and generate an llms.txt file for AI agents."""
     if provider not in ("gemini", "claude"):
         console.print(
-            f"[bold red]Erro:[/] Provider inválido: '{provider}'. Use 'gemini' ou 'claude'."
+            f"[bold red]Error:[/] Invalid provider: '{provider}'. Use 'gemini' or 'claude'."
         )
         raise typer.Exit(code=1)
 
     resolved_key = _resolve_api_key(provider, api_key)
 
     # -----------------------------------------------------------------------
-    # Modo GitHub
+    # GitHub Mode
     # -----------------------------------------------------------------------
     if github:
         resolved_github_token = _resolve_github_token(github_token)
 
         console.print(f"\n[bold]🐙 GitHub mode:[/] [cyan]{url}[/cyan]")
         if docs_base_url:
-            console.print(f"   [dim]Links apontarão para:[/dim] [cyan]{docs_base_url}[/cyan]")
+            console.print(f"   [dim]Links will point to:[/dim] [cyan]{docs_base_url}[/cyan]")
         console.print()
 
         pages = _run_with_progress(
-            "Coletando arquivos...",
+            "Collecting files...",
             max_pages,
             functools.partial(
                 crawl_github,
@@ -344,16 +344,16 @@ def fetch(
 
         if not pages:
             console.print(
-                "\n[bold yellow]Aviso:[/] Nenhum arquivo .md/.mdx encontrado no repositório.\n"
-                "  Verifique se a URL aponta para um repositório GitHub válido e se o\n"
-                "  GITHUB_TOKEN tem permissão de leitura. Rode [bold]prumo init[/bold] para reconfigurar."
+                "\n[bold yellow]Warning:[/] No .md/.mdx files found in the repository.\n"
+                "  Verify that the URL points to a valid GitHub repository and that the\n"
+                "  GITHUB_TOKEN has read permission. Run [bold]prumo init[/bold] to reconfigure."
             )
             raise typer.Exit(code=1)
 
-        console.print(f"\n  ✅ {len(pages)} arquivos encontrados\n")
+        console.print(f"\n  ✅ {len(pages)} files found\n")
 
     # -----------------------------------------------------------------------
-    # Modo HTTP estático (padrão)
+    # Static HTTP Mode (default)
     # -----------------------------------------------------------------------
     else:
         console.print(f"\n[bold]🔍 Validating URL:[/] {url}")
@@ -361,24 +361,24 @@ def fetch(
         console.print(f"[bold]🕷️  Crawling [cyan]{url}[/cyan]...[/]\n")
 
         pages = _run_with_progress(
-            "Crawling páginas...",
+            "Crawling pages...",
             max_pages,
             functools.partial(crawl, url, max_pages=max_pages),
         )
 
         if not pages:
             console.print(
-                "\n[bold yellow]Aviso:[/] Nenhuma página encontrada.\n"
-                "  [dim]Dica: se o site usa JavaScript para renderizar o conteúdo "
-                "(Docusaurus, VitePress, Next.js), use a flag [bold]--github[/bold] "
-                "com a URL do repositório da documentação.[/dim]"
+                "\n[bold yellow]Warning:[/] No pages found.\n"
+                "  [dim]Tip: if the site uses JavaScript to render content "
+                "(Docusaurus, VitePress, Next.js), use the [bold]--github[/bold] flag "
+                "with the documentation repository URL.[/dim]"
             )
             raise typer.Exit(code=1)
 
-        console.print(f"\n  ✅ {len(pages)} páginas processadas\n")
+        console.print(f"\n  ✅ {len(pages)} pages processed\n")
 
     # -----------------------------------------------------------------------
-    # Export — igual nos dois modos
+    # Export — same for both modes
     # -----------------------------------------------------------------------
     console.print(f"[bold]📝 Exporting to llms.txt via [cyan]{provider}[/cyan]...[/]")
     result = export_llms_txt(pages, provider, resolved_key)  # type: ignore[arg-type]

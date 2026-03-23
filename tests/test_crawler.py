@@ -1,6 +1,6 @@
-"""Testes unitários para o crawler.
+"""Unit tests for the crawler.
 
-Mock HTTP via respx para isolar de rede real.
+Mock HTTP via respx to isolate from real network.
 """
 
 from __future__ import annotations
@@ -58,7 +58,7 @@ ADVANCED_HTML = """
 
 
 class TestCrawlLinkFiltering:
-    """Testa que links fora do domínio/prefixo são ignorados."""
+    """Tests that links outside the domain/prefix are ignored."""
 
     @respx.mock
     def test_external_links_are_ignored(self) -> None:
@@ -76,14 +76,14 @@ class TestCrawlLinkFiltering:
         # Act
         pages = crawl(ROOT_URL, max_pages=50)
 
-        # Assert — nenhuma página de external.com deve aparecer
+        # Assert — no page from external.com should appear
         urls = [p.url for p in pages]
         assert all("external.com" not in u for u in urls)
         assert len(pages) == 3
 
     @respx.mock
     def test_links_outside_path_prefix_are_ignored(self) -> None:
-        """Links do mesmo domínio mas fora do prefixo /guide/ são ignorados."""
+        """Links from the same domain but outside the /guide/ prefix are ignored."""
         # Arrange
         html_with_about_link = """
         <html><head><title>Test</title></head>
@@ -99,13 +99,13 @@ class TestCrawlLinkFiltering:
         # Act
         pages = crawl(ROOT_URL, max_pages=50)
 
-        # Assert — /about está fora do prefixo /guide/
+        # Assert — /about is outside the /guide/ prefix
         assert len(pages) == 1
         assert pages[0].url == ROOT_URL
 
 
 class TestCrawlNavRemoval:
-    """Testa que tags de navegação são removidas do conteúdo."""
+    """Tests that navigation tags are removed from content."""
 
     @respx.mock
     def test_nav_footer_header_removed_from_content(self) -> None:
@@ -124,16 +124,16 @@ class TestCrawlNavRemoval:
         pages = crawl(ROOT_URL, max_pages=50)
         index_page = next(p for p in pages if p.url == ROOT_URL)
 
-        # Assert — conteúdo de nav, footer e header não deve aparecer
+        # Assert — content from nav, footer, and header should not appear
         assert "About" not in index_page.content
         assert "Footer content" not in index_page.content
         assert "Header" not in index_page.content
-        # Conteúdo principal deve existir
+        # Main content should exist
         assert "main documentation content" in index_page.content
 
 
 class TestCrawlMaxPages:
-    """Testa que max_pages limita o número de páginas retornadas."""
+    """Tests that max_pages limits the number of returned pages."""
 
     @respx.mock
     def test_max_pages_is_respected(self) -> None:
@@ -156,7 +156,7 @@ class TestCrawlMaxPages:
 
 
 class TestCrawlTitleExtraction:
-    """Testa extração de título da página."""
+    """Tests page title extraction."""
 
     @respx.mock
     def test_title_extracted_from_title_tag(self) -> None:
@@ -180,7 +180,7 @@ class TestCrawlTitleExtraction:
 
     @respx.mock
     def test_title_fallback_to_h1(self) -> None:
-        """Se não houver <title>, usa o primeiro <h1>."""
+        """If there is no <title>, uses the first <h1>."""
         # Arrange
         html_no_title = """
         <html><head></head>
@@ -201,7 +201,7 @@ class TestCrawlTitleExtraction:
 
     @respx.mock
     def test_title_untitled_when_no_title_or_h1(self) -> None:
-        """Sem <title> e sem <h1>, retorna 'Untitled'."""
+        """With no <title> and no <h1>, returns 'Untitled'."""
         # Arrange
         html_no_title = """
         <html><head></head>
@@ -219,7 +219,7 @@ class TestCrawlTitleExtraction:
 
 
 class TestCrawlContentExtraction:
-    """Testa extração do conteúdo limpo."""
+    """Tests extraction of cleaned content."""
 
     @respx.mock
     def test_content_from_main_tag(self) -> None:
@@ -236,7 +236,7 @@ class TestCrawlContentExtraction:
 
     @respx.mock
     def test_empty_content_page_is_skipped(self) -> None:
-        """Páginas sem conteúdo textual são ignoradas."""
+        """Pages without textual content are ignored."""
         # Arrange
         empty_html = """
         <html><head><title>Empty</title></head>
@@ -254,7 +254,7 @@ class TestCrawlContentExtraction:
 
 
 class TestCrawlHttpErrors:
-    """Testa comportamento com falhas HTTP."""
+    """Tests behavior with HTTP failures."""
 
     @respx.mock
     def test_http_error_page_is_skipped(self) -> None:

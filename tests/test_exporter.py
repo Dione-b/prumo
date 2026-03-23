@@ -1,6 +1,6 @@
-"""Testes unitários para o exporter.
+"""Unit tests for the exporter.
 
-Mock dos clientes LLM via unittest.mock.patch.
+Mock LLM clients via unittest.mock.patch.
 """
 
 from __future__ import annotations
@@ -37,27 +37,24 @@ LLM_RESPONSE = """# Example
 
 
 class TestExportGemini:
-    """Testa integração com Gemini (mockada)."""
+    """Tests integration with Gemini (mocked)."""
 
-    @patch("prumo.exporter.genai", create=True)
-    def test_gemini_returns_llm_response_unmodified(
-        self, mock_genai: MagicMock
-    ) -> None:
-        # Arrange — mock do import e da chamada
-        with patch("prumo.exporter._call_gemini", return_value=LLM_RESPONSE):
+    def test_gemini_returns_llm_response_unmodified(self) -> None:
+        # Arrange — mock import and call
+        with patch.dict("prumo.exporter._PROVIDER_CALLERS", {"gemini": MagicMock(return_value=LLM_RESPONSE)}):
             # Act
             result = export_llms_txt(SAMPLE_PAGES, "gemini", "fake-key")
 
-        # Assert — string retornada deve ser exatamente o que a LLM devolveu
+        # Assert — returned string must be exactly what the LLM returned
         assert result == LLM_RESPONSE
 
 
 class TestExportClaude:
-    """Testa integração com Claude (mockada)."""
+    """Tests integration with Claude (mocked)."""
 
     def test_claude_returns_llm_response_unmodified(self) -> None:
         # Arrange
-        with patch("prumo.exporter._call_claude", return_value=LLM_RESPONSE):
+        with patch.dict("prumo.exporter._PROVIDER_CALLERS", {"claude": MagicMock(return_value=LLM_RESPONSE)}):
             # Act
             result = export_llms_txt(SAMPLE_PAGES, "claude", "fake-key")
 
@@ -66,7 +63,7 @@ class TestExportClaude:
 
 
 class TestExportPromptConstruction:
-    """Testa que o prompt é construído corretamente."""
+    """Tests that the prompt is constructed correctly."""
 
     def test_prompt_contains_all_pages(self) -> None:
         # Arrange
@@ -76,11 +73,11 @@ class TestExportPromptConstruction:
             captured_prompt.append(prompt)
             return LLM_RESPONSE
 
-        with patch("prumo.exporter._call_gemini", side_effect=fake_gemini):
+        with patch.dict("prumo.exporter._PROVIDER_CALLERS", {"gemini": fake_gemini}):
             # Act
             export_llms_txt(SAMPLE_PAGES, "gemini", "fake-key")
 
-        # Assert — prompt deve conter títulos e URLs de todas as páginas
+        # Assert — prompt must contain titles and URLs of all pages
         prompt = captured_prompt[0]
         assert "Installation" in prompt
         assert "Quick Start" in prompt
@@ -88,7 +85,7 @@ class TestExportPromptConstruction:
         assert "https://docs.example.com/quickstart" in prompt
 
     def test_system_prompt_contains_rules(self) -> None:
-        """O system prompt deve conter as regras de formatação."""
+        """The system prompt must contain formatting rules."""
         # Assert
         assert "llms.txt" in SYSTEM_PROMPT
         assert "Markdown" in SYSTEM_PROMPT
@@ -96,10 +93,10 @@ class TestExportPromptConstruction:
 
 
 class TestExportTruncation:
-    """Testa warning quando conteúdo excede limite de tokens."""
+    """Tests warning when content exceeds token limit."""
 
     def test_truncation_warning_logged(self, caplog: pytest.LogCaptureFixture) -> None:
-        # Arrange — criar páginas com conteúdo que exceda o limite
+        # Arrange — create pages with content that exceeds limit
         big_content = "x" * (MAX_CONTENT_CHARS + 1000)
         base_url = "https://docs.example.com/p"
         big_pages = [
@@ -111,17 +108,17 @@ class TestExportTruncation:
             for i in range(5)
         ]
 
-        with patch("prumo.exporter._call_gemini", return_value="# Result"):
+        with patch.dict("prumo.exporter._PROVIDER_CALLERS", {"gemini": MagicMock(return_value="# Result")}):
             with caplog.at_level(logging.WARNING):
                 # Act
                 export_llms_txt(big_pages, "gemini", "fake-key")
 
-        # Assert — warning de truncamento deve aparecer nos logs
-        assert any("truncado" in record.message.lower() for record in caplog.records)
+        # Assert — truncation warning must appear in logs
+        assert any("truncated" in record.message.lower() for record in caplog.records)
 
 
 class TestExportEmptyPages:
-    """Testa que lista vazia retorna string vazia."""
+    """Tests that an empty list returns an empty string."""
 
     def test_empty_pages_returns_empty_string(self) -> None:
         # Act
@@ -132,9 +129,9 @@ class TestExportEmptyPages:
 
 
 class TestExportInvalidProvider:
-    """Testa que provider inválido levanta ValueError."""
+    """Tests that an invalid provider raises ValueError."""
 
     def test_invalid_provider_raises_value_error(self) -> None:
         # Act / Assert
-        with pytest.raises(ValueError, match="não suportado"):
+        with pytest.raises(ValueError, match="Unsupported provider"):
             export_llms_txt(SAMPLE_PAGES, "openai", "fake-key")  # type: ignore[arg-type]
