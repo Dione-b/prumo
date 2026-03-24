@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from prumo.crawler import Page
+from prumo.models import Page
 from prumo.exporter import MAX_CONTENT_CHARS, SYSTEM_PROMPT, export_llms_txt
 
 SAMPLE_PAGES = [
@@ -31,8 +31,12 @@ LLM_RESPONSE = """# Example
 > A library for doing example things.
 
 ## Getting Started
-- [Installation](https://docs.example.com/install): How to install the package.
-- [Quick Start](https://docs.example.com/quickstart): Create your first application.
+Run `pip install example` and configure your environment.
+
+---
+
+## Quick Start
+Create your first application using the bootstrap command.
 """
 
 
@@ -87,7 +91,7 @@ class TestExportPromptConstruction:
     def test_system_prompt_contains_rules(self) -> None:
         """The system prompt must contain formatting rules."""
         # Assert
-        assert "llms.txt" in SYSTEM_PROMPT
+        assert "Preserve ALL content" in SYSTEM_PROMPT
         assert "Markdown" in SYSTEM_PROMPT
         assert "Do NOT invent content" in SYSTEM_PROMPT
 

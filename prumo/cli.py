@@ -1,22 +1,4 @@
-"""Prumo CLI — entry point that orchestrates crawler and exporter.
-
-Only module that does disk IO. Validates inputs, shows progress
-with Rich and resolves API keys.
-
-Available commands:
-  prumo init   → interactive wizard that creates .env with required credentials
-  prumo fetch  → crawls documentation and generates llms.txt
-
-Fetch operation modes:
-  - Standard: static HTTP crawling (httpx + BeautifulSoup)
-  - --github: reads via GitHub Contents API (.md/.mdx), bypasses JS-Wall
-
-Credential resolution (priority order):
-  1. CLI Flag        (--api-key, --github-token)
-  2. .env file       (loaded automatically from current directory)
-  3. Shell env var
-  4. Error with clear instructions — run `prumo init` to configure
-"""
+"""Prumo CLI — orchestrates crawling and llms.md export."""
 
 from __future__ import annotations
 
@@ -26,21 +8,22 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated
 
-import httpx
 import typer
 from dotenv import load_dotenv
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
 
-from prumo.crawler import Page, crawl, crawl_github
+from prumo.crawlers import resolve_crawler
+from prumo.errors import CrawlerError
 from prumo.exporter import export_llms_txt
+from prumo.models import Page
 
 load_dotenv(dotenv_path=Path.cwd() / ".env", override=False)
 
 app = typer.Typer(
     name="prumo",
-    help="Convert documentation sites into llms.txt files for AI agents.",
+    help="Convert documentation sites into llms.md files for AI agents.",
     add_completion=False,
 )
 console = Console()
@@ -49,6 +32,12 @@ API_KEY_ENV_VARS = {
     "gemini": "GEMINI_API_KEY",
     "claude": "ANTHROPIC_API_KEY",
 }
+
+JS_SECURITY_WARNING = (
+    "[bold yellow]Warning:[/] JavaScript rendering mode enabled.\n"
+    "   This launches a headless browser that may execute untrusted code.\n"
+    "   Use only with trusted sites."
+)
 
 
 @app.callback()
@@ -96,18 +85,6 @@ def _resolve_github_token(github_token_flag: str | None) -> str:
         "    [green]GITHUB_TOKEN=your-token-here[/green]"
     )
     raise typer.Exit(code=1)
-
-
-def _validate_url(url: str) -> None:
-    """Validates that the URL is accessible before crawling."""
-    try:
-        with httpx.Client(timeout=10) as client:
-            response = client.head(url, follow_redirects=True)
-            response.raise_for_status()
-    except (httpx.HTTPError, httpx.TimeoutException) as exc:
-        console.print(f"[bold red]Error:[/] URL inaccessible: {url}")
-        console.print(f"  Detail: {exc}")
-        raise typer.Exit(code=1) from exc
 
 
 def _run_with_progress(
@@ -190,7 +167,7 @@ def init(
     # LLM Provider
     # ------------------------------------------------------------------
     console.print(f"[bold]{step}. LLM Provider[/bold]")
-    console.print("   Which provider do you want to use to generate the llms.txt?\n")
+    console.print("   Which provider do you want to use to generate the llms.md?\n")
     step += 1
 
     provider_choice = typer.prompt(
@@ -298,98 +275,114 @@ def fetch(
         str | None,
         typer.Option("--github-token", help="GitHub Personal Access Token"),
     ] = None,
+    js: Annotated[
+        bool,
+        typer.Option(
+            "--js",
+            help=(
+                "Renders pages with a headless browser (Playwright). "
+                "Use for sites that require JavaScript. "
+                "Requires: pip install prumo[js] && playwright install chromium"
+            ),
+        ),
+    ] = False,
     docs_base_url: Annotated[
         str | None,
         typer.Option(
             "--docs-base-url", "-d",
             help=(
                 "Base URL of the published documentation. When provided, links in "
-                "the llms.txt will point to the docs site instead of the GitHub source. "
+                "the llms.md will point to the docs site instead of the GitHub source. "
                 "Example: --docs-base-url https://developers.stellar.org/docs"
             ),
         ),
     ] = None,
 ) -> None:
-    """Fetch documentation and generate an llms.txt file for AI agents."""
+    """Fetch documentation and generate an llms.md file for AI agents."""
     if provider not in ("gemini", "claude"):
         console.print(
             f"[bold red]Error:[/] Invalid provider: '{provider}'. Use 'gemini' or 'claude'."
         )
         raise typer.Exit(code=1)
 
+    if github and js:
+        console.print("[bold red]Error:[/] --github and --js are mutually exclusive.")
+        raise typer.Exit(code=1)
+
     resolved_key = _resolve_api_key(provider, api_key)
+    resolved_github_token = _resolve_github_token(github_token) if github else None
 
-    # -----------------------------------------------------------------------
-    # GitHub Mode
-    # -----------------------------------------------------------------------
+    try:
+        crawler = resolve_crawler(
+            github=github,
+            js=js,
+            github_token=resolved_github_token,
+            docs_base_url=docs_base_url,
+        )
+    except CrawlerError as exc:
+        console.print(f"[bold red]Error:[/] {exc}")
+        raise typer.Exit(code=1) from exc
+
     if github:
-        resolved_github_token = _resolve_github_token(github_token)
-
         console.print(f"\n[bold]🐙 GitHub mode:[/] [cyan]{url}[/cyan]")
         if docs_base_url:
             console.print(f"   [dim]Links will point to:[/dim] [cyan]{docs_base_url}[/cyan]")
-        console.print()
+        progress_label = "Collecting files..."
+    elif js:
+        console.print(f"\n{JS_SECURITY_WARNING}")
+        console.print(f"\n[bold]🌐 JS mode:[/] [cyan]{url}[/cyan]")
+        progress_label = "Rendering pages..."
+    else:
+        console.print(f"\n[bold]🕷️  Crawling [cyan]{url}[/cyan]...[/]")
+        progress_label = "Crawling pages..."
+    console.print()
 
+    try:
         pages = _run_with_progress(
-            "Collecting files...",
+            progress_label,
             max_pages,
-            functools.partial(
-                crawl_github,
-                url,
-                resolved_github_token,
-                max_pages=max_pages,
-                docs_base_url=docs_base_url,
-            ),
+            functools.partial(crawler.crawl, url, max_pages=max_pages),
         )
+    except CrawlerError as exc:
+        console.print(f"\n[bold red]Error:[/] {exc}")
+        raise typer.Exit(code=1) from exc
 
-        if not pages:
+    if not pages:
+        if github:
             console.print(
                 "\n[bold yellow]Warning:[/] No .md/.mdx files found in the repository.\n"
                 "  Verify that the URL points to a valid GitHub repository and that the\n"
                 "  GITHUB_TOKEN has read permission. Run [bold]prumo init[/bold] to reconfigure."
             )
-            raise typer.Exit(code=1)
-
-        console.print(f"\n  ✅ {len(pages)} files found\n")
-
-    # -----------------------------------------------------------------------
-    # Static HTTP Mode (default)
-    # -----------------------------------------------------------------------
-    else:
-        console.print(f"\n[bold]🔍 Validating URL:[/] {url}")
-        _validate_url(url)
-        console.print(f"[bold]🕷️  Crawling [cyan]{url}[/cyan]...[/]\n")
-
-        pages = _run_with_progress(
-            "Crawling pages...",
-            max_pages,
-            functools.partial(crawl, url, max_pages=max_pages),
-        )
-
-        if not pages:
+        elif js:
+            console.print(
+                "\n[bold yellow]Warning:[/] No pages found after JavaScript rendering.\n"
+                "  Check if the site blocks bots, requires authentication, or if --max-pages is too low."
+            )
+        else:
             console.print(
                 "\n[bold yellow]Warning:[/] No pages found.\n"
-                "  [dim]Tip: if the site uses JavaScript to render content "
-                "(Docusaurus, VitePress, Next.js), use the [bold]--github[/bold] flag "
-                "with the documentation repository URL.[/dim]"
+                "  [dim]Tip: for JS-rendered sites use [bold]--js[/bold], or [bold]--github[/bold] "
+                "with a repository URL when markdown sources are available.[/dim]"
             )
-            raise typer.Exit(code=1)
+        raise typer.Exit(code=1)
 
-        console.print(f"\n  ✅ {len(pages)} pages processed\n")
+    item_label = "files found" if github else "pages processed"
+    console.print(f"\n  ✅ {len(pages)} {item_label}\n")
 
     # -----------------------------------------------------------------------
     # Export — same for both modes
     # -----------------------------------------------------------------------
-    console.print(f"[bold]📝 Exporting to llms.txt via [cyan]{provider}[/cyan]...[/]")
+    console.print(f"[bold]📝 Exporting to llms.md via [cyan]{provider}[/cyan]...[/]")
     result = export_llms_txt(pages, provider, resolved_key)  # type: ignore[arg-type]
 
     output_dir = Path(output)
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_file = output_dir / "llms.txt"
+    output_file = output_dir / "llms.md"
     output_file.write_text(result, encoding="utf-8")
 
     console.print(
-        f"\n[bold green]✅ Done![/] llms.txt written to [cyan]{output_file}[/cyan]\n"
+        f"\n[bold green]✅ Done![/] llms.md written to [cyan]{output_file}[/cyan]\n"
     )
 
 

@@ -1,7 +1,7 @@
 <p align="center">
   <h1 align="center">🪸 Prumo</h1>
   <p align="center">
-    Convert any documentation site into an <code>llms.txt</code> file —<br>
+    Convert any documentation site into an <code>llms.md</code> file —<br>
     structured context ready for AI coding agents.
   </p>
   <p align="center">
@@ -18,7 +18,7 @@
 
 AI models hallucinate APIs from new or obscure libraries because they were never trained on that documentation. When you ask a coding agent to use a recent SDK, it invents function names, parameters, and behaviors that do not exist.
 
-Prumo solves this by turning live documentation into a compact, structured `llms.txt` file that you can drop into any agent's context window.
+Prumo solves this by turning live documentation into a compact, structured `llms.md` file that you can drop into any agent's context window.
 
 ## How It Works
 
@@ -27,18 +27,19 @@ URL or GitHub repo
         │
         ▼
   ┌─────────────┐     ┌──────────────┐     ┌────────────┐
-  │   Crawler    │────▶│   Exporter   │────▶│  llms.txt  │
-  │ (httpx  or  │     │ (Gemini  or  │     │ (Markdown) │
-  │  GitHub API)│     │   Claude)    │     │            │
+  │   Crawler    │────▶│   Exporter   │────▶│  llms.md   │
+  │(Static/GitHub│     │ (Gemini  or  │     │ (Markdown) │
+  │ /Playwright) │     │   Claude)    │     │            │
   └─────────────┘     └──────────────┘     └────────────┘
 ```
 
-**Crawler** operates in two modes:
+**Crawler** operates in three modes:
 
 - **Default** — navigates static HTML, follows internal links, strips navigation noise.
 - **GitHub mode** (`--github`) — reads `.md`/`.mdx` files directly from a repository via the GitHub API. Bypasses JavaScript-rendered sites (Docusaurus, VitePress, Next.js).
+- **JS mode** (`--js`) — renders pages with a headless browser (Playwright) for JavaScript-heavy sites with no useful GitHub markdown source.
 
-**Exporter** sends the cleaned content to an LLM, which generates a `llms.txt` organized into logical sections with one-line descriptions per page.
+**Exporter** sends the cleaned content to an LLM, which generates a `llms.md` with full Markdown documentation content.
 
 ## Installation
 
@@ -92,17 +93,37 @@ prumo fetch https://docs.example.com
 # GitHub mode — reads .md/.mdx directly from the repository
 prumo fetch https://github.com/some/repo --github
 
+# JavaScript mode — renders with Playwright
+prumo fetch https://docs.stellar.org --js --max-pages 30
+
 # Remap GitHub blob links to the published documentation URLs
 prumo fetch https://github.com/stellar/stellar-docs \
   --github \
   --docs-base-url https://developers.stellar.org/docs
 ```
 
-The result is written to `./output/llms.txt` by default.
+### 3. Optional JS setup (Playwright)
+
+```bash
+pip install prumo[js]
+playwright install chromium
+```
+
+When `--js` is used, Prumo prints this warning:
+
+```text
+Warning: JavaScript rendering mode enabled.
+   This launches a headless browser that may execute untrusted code.
+   Use only with trusted sites.
+```
+
+The result is written to `./output/llms.md` by default.
+
+Current release version: `0.1.2`.
 
 ## Output Format
 
-Prumo generates a `llms.txt` following the [llmstxt.org](https://llmstxt.org) standard:
+Prumo generates a `llms.md` following the [llmstxt.org](https://llmstxt.org) standard:
 
 ```markdown
 # FastAPI
@@ -132,7 +153,7 @@ Options:
 
 ### `prumo fetch <url>`
 
-Crawls a documentation site and generates `llms.txt`.
+Crawls a documentation site and generates `llms.md`.
 
 | Option                  | Default    | Description                                            |
 | ----------------------- | ---------- | ------------------------------------------------------ |
@@ -143,6 +164,7 @@ Crawls a documentation site and generates `llms.txt`.
 | `--max-pages`, `-m`     | `50`       | Maximum pages or files to crawl                        |
 | `--github`              | `false`    | Use the GitHub API to read `.md`/`.mdx` files directly |
 | `--github-token`        | env var    | GitHub Personal Access Token                           |
+| `--js`                  | `false`    | Use Playwright to render JS-heavy docs                 |
 | `--docs-base-url`, `-d` | —          | Remap GitHub blob links to the published docs URL      |
 
 ### Credential resolution order
@@ -157,7 +179,8 @@ For each secret, Prumo tries in this order and stops at the first match:
 
 |                            |                                                                                                                                                 |
 | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| **JS-rendered sites**      | Sites that require JavaScript to render will return empty content in standard mode. Use `--github` if the repository has Markdown source files. |
+| **JS-rendered sites**      | Standard mode may return empty pages on JS-heavy docs. Prefer `--github` first; use `--js` when no markdown source is available. |
+| **Playwright mode costs**  | `--js` is slower and uses more CPU/RAM because it launches a headless browser for rendering. |
 | **Large documentation**    | Crawling is capped at `--max-pages` to avoid bloated API calls. Increase it if the generated file feels incomplete.                             |
 | **Output quality**         | Depends on the LLM provider and the structure of the source documentation. Gemini 2.5 Flash is the default and works well for most cases.       |
 | **GitHub API rate limits** | Authenticated requests are limited to 5,000 per hour. A large repository with `--max-pages 200` can consume several hundred requests.           |
