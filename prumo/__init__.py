@@ -1,1 +1,5 @@
-__version__ = "0.1.0"
+from prumo.models import Page
+
+__version__ = "0.1.2"
+
+__all__ = ["Page", "__version__"]
